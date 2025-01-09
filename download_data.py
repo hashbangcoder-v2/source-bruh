@@ -5,7 +5,7 @@ import datetime
 import requests
 
 # Replace with your actual credentials
-API_KEY = "AIzaSyBOU2b_ks6WI9ZiSHG8mSip9dcDVIIIKxA"
+API_KEY = ""
 album_name = 'Twitter'
 
 SCOPES = ['https://www.googleapis.com/auth/photoslibrary', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'openid']
