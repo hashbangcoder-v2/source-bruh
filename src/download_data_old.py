@@ -3,9 +3,16 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google_auth_oauthlib.flow import Flow
 import datetime
 import requests
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+api_key = os.getenv("api_key")
+api_secret = os.getenv("API_SECRET")
 
 # Replace with your actual credentials
-API_KEY = "AIzaSyBOU2b_ks6WI9ZiSHG8mSip9dcDVIIIKxA"
+API_KEY = "<SOME_KEY>"
 album_name = 'Twitter'
 
 SCOPES = ['https://www.googleapis.com/auth/photoslibrary', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'openid']
