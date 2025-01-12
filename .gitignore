@@ -3,3 +3,7 @@ client_secret.json
 *.png
 *.jpeg
 .vscode/*
+.env
+.parcel-cache/*
+dist/*
+node_modules/*
