@@ -1,0 +1,33 @@
+{
+  "google_photos": {
+    "client_secret_path": "client_secret.json",
+    "scopes": [
+      "https://www.googleapis.com/auth/photoslibrary.readonly",
+      "openid",
+      "https://www.googleapis.com/auth/userinfo.email"
+    ],
+    "redirect_port": 1008,
+    "albums": ["Twitter"],
+    "token_store": "data/google_photos_token.json"
+  },
+  "llm": {
+    "oracle_model": "gemini-1.5-flash-latest",
+    "embedding_model": "text-embedding-004",
+    "api_key_env": "GOOGLE_API_KEY"
+  },
+  "db": {
+    "path": "data/vector.db",
+    "dimension": 768
+  },
+  "storage": {
+    "images_dir": "data/images",
+    "thumbs_dir": "data/thumbs",
+    "max_download_size": "w2048-h2048"
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 5057
+  }
+}
+
+
