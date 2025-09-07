@@ -8,6 +8,7 @@ const rootElement = document.getElementById("root");
 
 // Create a root using ReactDOM's createRoot
 const root = ReactDOM.createRoot(rootElement);
-
+console.log("Popup loaded");
 // Render the React component into the DOM
-root.render(<ExtensionPopup />);
+root.render(<ExtensionPopup/>);
+

@@ -1,9 +1,10 @@
 client_secret.json
-*.jpg
-*.png
-*.jpeg
 .vscode/*
 .env
 .parcel-cache/*
 dist/*
 node_modules/*
+latest-ui/*
+components/ui/
+src/__pycache__/*
+*.db
