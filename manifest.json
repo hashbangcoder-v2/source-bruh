@@ -4,7 +4,7 @@
   "description": "When you wanna quote a source for that claim",
   "version": "1.1",
   "action": {
-    "default_popup": "dist/popup.html",
+    "default_popup": "frontend/dist/popup.html",
     "default_icon": "src/icons/icon.png"
   },
   "host_permissions": [
