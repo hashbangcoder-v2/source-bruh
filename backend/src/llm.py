@@ -14,7 +14,6 @@ class GeminiClient:
         self.embedding_model_name = embedding_model
 
     def describe_image(self, image_bytes: bytes) -> str:
-        # Using Gemini 1.5 Flash multimodal prompt
         model = genai.GenerativeModel(self.oracle_model_name)
         prompt = (
             "Describe this image concisely for search. Focus on pictograms/infographics/charts. "
@@ -28,7 +27,6 @@ class GeminiClient:
 
     def embed_text(self, text: str) -> List[float]:
         embed = genai.embed_content(model=self.embedding_model_name, content=text)
-        # google-generativeai may return dict or object; normalize
         if isinstance(embed, dict):
             emb = embed.get("embedding") or embed.get("data", {}).get("embedding")
         else:

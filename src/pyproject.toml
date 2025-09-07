@@ -12,4 +12,5 @@ dependencies = [
     "google-api-python-client>=2.137.0",
     "Pillow>=10.3.0",
     "google-generativeai>=0.7.2",
+    "omegaconf>=2.3.0",
 ]

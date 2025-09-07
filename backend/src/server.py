@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.src.config_loader import load_config  # new path after reorg
+from backend.src.config_loader import load_config
 from backend.src.db import Database
 from backend.src.llm import GeminiClient
 from googleapiclient.discovery import build
@@ -180,6 +180,7 @@ def create_app(config_path: str = None) -> FastAPI:
             scopes=photos_cfg.get("scopes", []),
             redirect_port=photos_cfg.get("redirect_port", 1008),
             token_store=photos_cfg.get("token_store"),
+            oauth_client=photos_cfg.get("oauth_client"),
         )
         return {"ok": True, "user": client.user_email}
 
@@ -194,6 +195,5 @@ if __name__ == "__main__":
     cfg = load_config(os.environ.get("SOURCE_BRUH_CONFIG") or None)
     host = cfg.get("server", {}).get("host", "127.0.0.1")
     port = int(cfg.get("server", {}).get("port", 5057))
-    uvicorn.run("src.server:app", host=host, port=port, reload=False)
-
+    uvicorn.run("backend.src.server:app", host=host, port=port, reload=False)
 
