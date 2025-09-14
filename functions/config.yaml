@@ -1,0 +1,41 @@
+﻿server:
+  host: "127.0.0.1"
+  port: 8080
+
+google_photos:
+  client_secret_path: "client_secret.json"
+  scopes:
+    - "https://www.googleapis.com/auth/photoslibrary.readonly"
+    - "openid"
+    - "https://www.googleapis.com/auth/userinfo.email"
+  redirect_port: 1008
+  albums:
+    - "Twitter"
+  token_store: "data/google_photos_token.json"
+  album_url: ""
+  oauth_client:
+    web:
+      client_id: "<your-oauth-client-id>.apps.googleusercontent.com"
+      auth_uri: "https://accounts.google.com/o/oauth2/auth"
+      token_uri: "https://oauth2.googleapis.com/token"
+      redirect_uris:
+        - "http://localhost:1008/"
+
+llm:
+  embedding_model: "gemini-embedding-2"
+  api_key_env: "GOOGLE_API_KEY"
+
+db:
+  service_account_key_path: "gcloud-service-account.json"
+  dimension: 768
+  image_collection: "images"
+  vector_field: "embedding_vector"
+  vector_search_enabled: true
+  vector_search_fallback: false
+
+storage:
+  bucket_name: "<your-prod-image-bucket>"
+  images_dir: "data/images"
+  thumbs_dir: "data/thumbs"
+  pending_dir: "data/pending"
+  max_download_size: "w2048-h2048"
