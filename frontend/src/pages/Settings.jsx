@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import extCfg from "../extension-config.json";
+import { auth, googleProvider } from "../firebase";
+import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 
 export default function Settings() {
-  const [userEmail, setUserEmail] = useState("");
+  const [user, setUser] = useState(null);
   const [albumUrl, setAlbumUrl] = useState("");
   const [albumUrlDraft, setAlbumUrlDraft] = useState("");
   const [geminiPresent, setGeminiPresent] = useState(false);
@@ -13,53 +15,35 @@ export default function Settings() {
   const serverBase = extCfg.serverBaseUrl;
 
   useEffect(() => {
-    fetch(`${serverBase}/settings`)
-      .then((r) => r.json())
-      .then((d) => {
-        setUserEmail(d.user || "");
-        const au = d.album_url || "";
-        setAlbumUrl(au);
-        setAlbumUrlDraft(au);
-        setGeminiPresent(!!d.gemini_key_present);
-        setGeminiEnv(d.gemini_key_env || "GOOGLE_API_KEY");
-      })
-      .catch(() => {});
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        // Fetch settings from your backend after user is logged in
+        // This part will be updated once the backend is on Cloud Run
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
-  async function saveAlbumUrl() {
-    await fetch(`${serverBase}/settings/album-url`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ album_url: albumUrlDraft || albumUrl }),
-    });
-    if (albumUrlDraft) setAlbumUrl(albumUrlDraft);
-    setEditAlbum(false);
-  }
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Error during sign-in:", error);
+    }
+  };
 
-  async function saveGeminiKey() {
-    if (!keyDraft) return;
-    await fetch(`${serverBase}/settings/gemini-key`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_key: keyDraft }),
-    });
-    setGeminiPresent(true);
-    setEditKey(false);
-    setKeyDraft("");
-  }
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Error during sign-out:", error);
+    }
+  };
 
-  async function logout() {
-    await fetch(`${serverBase}/settings/logout`, { method: "POST" });
-    setUserEmail("");
-  }
-
-  async function login() {
-    await fetch(`${serverBase}/auth/login`, { method: "POST" });
-    // refresh settings
-    const r = await fetch(`${serverBase}/settings`);
-    const d = await r.json();
-    setUserEmail(d.user || "");
-  }
+  // Placeholder functions for saving data. These will need to be updated.
+  const saveAlbumUrl = () => setEditAlbum(false);
+  const saveGeminiKey = () => setEditKey(false);
 
   return (
     <div className="space-y-5">      
@@ -67,11 +51,17 @@ export default function Settings() {
         <div className="field">
           <div className="field-label">Signed in</div>
           <div className="field-value">
-            <div className="text-[13px] text-neutral-800 truncate">{userEmail || "Not signed in"}</div>
-            {userEmail ? (
-              <button className="icon-btn" onClick={logout} title="Log out">⎋</button>
+            <div className="text-[13px] text-neutral-800 truncate">
+              {user ? user.email : "Not signed in"}
+            </div>
+            {user ? (
+              <button className="icon-btn" onClick={handleLogout} title="Log out">
+                ⎋
+              </button>
             ) : (
-              <button className="icon-btn" onClick={login} title="Log in">➤</button>
+              <button className="btn" onClick={handleLogin}>
+                Log in
+              </button>
             )}
           </div>
         </div>

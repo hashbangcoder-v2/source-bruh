@@ -4,10 +4,10 @@ from typing import List
 
 from PIL import Image
 
-from backend.src.config_loader import load_config
-from backend.src.db import Database
-from backend.src.photos_client import GooglePhotosClient
-from backend.src.llm import GeminiClient
+from config_loader import load_config
+from db import Database
+from photos_client import GooglePhotosClient
+from llm import GeminiClient
 
 
 def create_thumbnail(image_bytes: bytes, max_size: int = 320) -> bytes:

@@ -2,16 +2,28 @@ from typing import Any, Dict, List, Optional
 import json
 import os
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer
+from firebase_admin import auth
 from pydantic import BaseModel
 
-from backend.src.config_loader import load_config
-from backend.src.db import Database
-from backend.src.llm import GeminiClient
+from config_loader import load_config
+from db import FirestoreDB
+from llm import GeminiClient
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
-from backend.src.photos_client import GooglePhotosClient
+from photos_client import GooglePhotosClient
+
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    try:
+        decoded_token = auth.verify_id_token(token)
+        return decoded_token
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
 
 
 class SearchResponseItem(BaseModel):
@@ -36,7 +48,7 @@ def create_app(config_path: str = None) -> FastAPI:
     )
 
     cfg_path = os.environ.get("SOURCE_BRUH_CONFIG") or os.fspath(__import__("pathlib").Path.cwd() / "backend" / "config.yaml")
-    db = Database(cfg["db"]["path"], cfg["db"]["dimension"])
+    db = FirestoreDB(cfg["db"]["service_account_key_path"])
     gemini_client: GeminiClient | None = None
 
     def get_gemini() -> GeminiClient | None:
@@ -58,7 +70,7 @@ def create_app(config_path: str = None) -> FastAPI:
         return {"ok": True}
 
     @app.get("/search", response_model=List[SearchResponseItem])
-    def search(q: str, top_k: int = 20):
+    async def search(q: str, top_k: int = 20, user: dict = Depends(get_current_user)):
         if not q:
             raise HTTPException(status_code=400, detail="Missing query")
         client = get_gemini()

@@ -4,7 +4,7 @@ from omegaconf import OmegaConf
 
 
 def load_config(explicit_path: str | None = None) -> Dict[str, Any]:
-    cfg_path = Path(explicit_path) if explicit_path else Path.cwd() / "backend" / "config.yaml"
+    cfg_path = Path(explicit_path) if explicit_path else Path.cwd() / "config.yaml"
     cfg = OmegaConf.to_container(OmegaConf.load(cfg_path), resolve=True)  # type: ignore[arg-type]
 
     storage = cfg.get("storage", {})

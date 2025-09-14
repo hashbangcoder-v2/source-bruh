@@ -1,10 +1,12 @@
 import { Search, Settings as Gear, ArrowLeft } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Landing from "./pages/Landing";
 import Query from "./pages/Query";
 import Results from "./pages/Results";
 import Settings from "./pages/Settings";
 import extCfg from "./extension-config.json";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "./firebase";
 
 export default function ExtensionPopup() {
   const [query, setQuery] = useState("");
@@ -13,6 +15,21 @@ export default function ExtensionPopup() {
   const [error, setError] = useState("");
   const [view, setView] = useState("landing");
   const serverBase = extCfg.serverBaseUrl;
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        const token = await user.getIdToken();
+        // Store the token in a way that's accessible to your API calls
+        // For example, in a context or a global state management library.
+        // For simplicity here, we can store it in localStorage, though this is not the most secure method for extensions.
+        localStorage.setItem('firebaseIdToken', token);
+      } else {
+        localStorage.removeItem('firebaseIdToken');
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   async function onSearch() {
     setError("");
@@ -28,6 +45,17 @@ export default function ExtensionPopup() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function makeAuthenticatedRequest(url, options = {}) {
+    const token = localStorage.getItem('firebaseIdToken');
+    const headers = {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`,
+    };
+    const response = await fetch(url, { ...options, headers });
+    // ... handle response
+    return response.json();
   }
 
   function goFromLanding() {

@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+gunicorn
+google-api-python-client
+google-auth-oauthlib
+pillow
+google-generativeai
+omegaconf
+firebase-admin
+python-dotenv
+firebase-functions
+asgiref
