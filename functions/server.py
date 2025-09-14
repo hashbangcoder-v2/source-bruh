@@ -34,6 +34,11 @@ class SearchResponseItem(BaseModel):
     timestamp: Optional[str]
     thumb_url: str
 
+class SettingsResponse(BaseModel):
+    email: str
+    album_url: str
+    gemini_key_set: bool
+
 
 def create_app(config_path: str = None) -> FastAPI:
     cfg = load_config(config_path)
@@ -103,38 +108,22 @@ def create_app(config_path: str = None) -> FastAPI:
             data = f.read()
         return Response(content=data, media_type="image/jpeg")
 
-    @app.get("/settings")
-    def get_settings():
-        # Load latest config from disk so UI reflects updates immediately
-        try:
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                current_cfg = json.load(f)
-        except Exception:
-            current_cfg = cfg
-        # Redact API key
-        llm_cfg = dict(current_cfg.get("llm", {}))
-        key_env = llm_cfg.get("api_key_env")
-        key_present = True if key_env and os.environ.get(key_env) else False
-        # Try to get user info from token store
-        user_email = None
-        token_store = current_cfg.get("google_photos", {}).get("token_store")
-        if token_store and os.path.exists(token_store):
-            try:
-                with open(token_store, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                creds = Credentials.from_authorized_user_info(data)
-                oauth2 = build('oauth2', 'v2', credentials=creds)
-                info = oauth2.userinfo().get().execute()
-                user_email = info.get("email")
-            except Exception:
-                user_email = None
-        return {
-            "user": user_email,
-            "albums": current_cfg.get("google_photos", {}).get("albums", []),
-            "album_url": current_cfg.get("google_photos", {}).get("album_url", ""),
-            "gemini_key_present": key_present,
-            "gemini_key_env": key_env,
-        }
+    @app.get("/settings", response_model=SettingsResponse)
+    async def get_settings(user: dict = Depends(get_current_user)):
+        """Endpoint to get user settings."""
+        uid = user["uid"]
+        user_settings = db.get_user_settings(uid)
+        if not user_settings:
+            raise HTTPException(status_code=404, detail="Settings not found for user")
+
+        user_info = photos_client.get_user_info_from_db(uid)
+
+        return SettingsResponse(
+            email=user_info.get("email", ""),
+            album_url=user_settings.get("album_url", ""),
+            gemini_key_set=bool(user_settings.get("gemini_api_key")),
+        )
+
 
     class UpdateAlbumsBody(BaseModel):
         albums: List[str]
@@ -187,7 +176,7 @@ def create_app(config_path: str = None) -> FastAPI:
     def login():
         # Trigger OAuth flow to ensure credentials and update token store
         photos_cfg = cfg.get("google_photos", {})
-        client = GooglePhotosClient(
+        client = PhotosClient(
             client_secret_path=photos_cfg.get("client_secret_path"),
             scopes=photos_cfg.get("scopes", []),
             redirect_port=photos_cfg.get("redirect_port", 1008),

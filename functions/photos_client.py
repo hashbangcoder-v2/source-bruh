@@ -9,18 +9,18 @@ from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
 import json
+from db import FirestoreDB
+from omegaconf import DictConfig
 
 
 class GooglePhotosClient:
-    def __init__(self, client_secret_path: str, scopes: List[str], redirect_port: int, token_store: str | None = None, oauth_client: dict | None = None) -> None:
-        self.client_secret_path = client_secret_path
-        self.scopes = scopes
-        self.redirect_port = redirect_port
-        self.token_store = token_store
-        self.oauth_client = oauth_client or {}
-        self.service = self._build_service()
-        self.user_email: Optional[str] = None
-        self.code_verifier: Optional[str] = None
+    def __init__(self, cfg: DictConfig, db: FirestoreDB):
+        self.cfg = cfg
+        self.db = db
+        self.oauth_client = cfg.oauth_client
+        self.redirect_port = cfg.redirect_port
+        self.scopes = list(cfg.scopes)
+        self.token_store = cfg.token_store  # Keep for local dev maybe, but not for cloud
 
     def _generate_pkce_pair(self) -> tuple[str, str]:
         """Generate PKCE code verifier and challenge"""
@@ -30,8 +30,7 @@ class GooglePhotosClient:
         ).decode('utf-8').rstrip('=')
         return code_verifier, code_challenge
 
-    def _authenticate_with_pkce(self) -> Credentials:
-        """Authenticate using OAuth 2.0 PKCE flow"""
+    def get_auth_url(self) -> str:
         client_id = self.oauth_client["web"]["client_id"]
         redirect_uri = f"http://localhost:{self.redirect_port}/"
         
@@ -55,68 +54,49 @@ class GooglePhotosClient:
         print(f"{auth_url}")
         print(f"\nWaiting for authorization code...")
         
-        # Start a simple HTTP server to receive the callback
-        from http.server import HTTPServer, BaseHTTPRequestHandler
-        import threading
-        import webbrowser
+        return auth_url
+
+    def get_credentials_from_db(self, uid: str) -> Optional[Credentials]:
+        """Gets user's Google Photos API credentials from Firestore."""
+        return self.db.get_google_photos_credentials(uid)
+
+    def get_user_info_from_db(self, uid: str) -> dict:
+        """Gets user's info from Firestore."""
+        return self.db.get_user_info(uid)
+
+    def get_credentials_from_code(self, code: str, uid: str) -> Credentials:
+        """
+        Handles the OAuth callback, exchanging the authorization code for credentials
+        and saving them to Firestore. Also fetches and saves user info.
+        """
+        client_id = self.oauth_client["web"]["client_id"]
+        redirect_uri = f"http://localhost:{self.redirect_port}/"
         
-        auth_code = None
+        # Generate PKCE pair
+        code_verifier, code_challenge = self._generate_pkce_pair()
+        self.code_verifier = code_verifier
         
-        class CallbackHandler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                nonlocal auth_code
-                if self.path.startswith('/?code='):
-                    auth_code = self.path.split('code=')[1].split('&')[0]
-                    self.send_response(200)
-                    self.send_header('Content-type', 'text/html')
-                    self.end_headers()
-                    self.wfile.write(b'<html><body><h1>Authorization successful!</h1><p>You can close this window.</p></body></html>')
-                else:
-                    self.send_response(400)
-                    self.end_headers()
-                    self.wfile.write(b'<html><body><h1>Authorization failed</h1></body></html>')
-        
-        # Start server in a thread
-        server = HTTPServer(('localhost', self.redirect_port), CallbackHandler)
-        server_thread = threading.Thread(target=server.serve_forever)
-        server_thread.daemon = True
-        server_thread.start()
-        
-        # Open browser
-        webbrowser.open(auth_url)
-        
-        # Wait for authorization code
-        while auth_code is None:
-            import time
-            time.sleep(0.1)
-        
-        server.shutdown()
-        
-        # Exchange authorization code for tokens
-        token_url = "https://oauth2.googleapis.com/token"
-        token_data = {
-            'client_id': client_id,
-            'code': auth_code,
-            'grant_type': 'authorization_code',
-            'redirect_uri': redirect_uri,
-            'code_verifier': code_verifier
-        }
-        
-        response = requests.post(token_url, data=token_data)
-        token_response = response.json()
-        
-        if 'error' in token_response:
-            raise Exception(f"Token exchange failed: {token_response['error']}")
-        
-        # Create credentials object
-        creds = Credentials(
-            token=token_response['access_token'],
-            refresh_token=token_response.get('refresh_token'),
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=client_id,
-            scopes=self.scopes
+        # Use a flow object to complete the auth process
+        flow = InstalledAppFlow.from_client_config(
+            self.oauth_client, self.scopes, redirect_uri=redirect_uri
         )
-        
+
+        # Exchange code for credentials
+        flow.fetch_token(code=code, code_verifier=code_verifier)
+        creds = flow.credentials
+
+        # Save credentials to Firestore
+        self.db.save_google_photos_credentials(uid, creds)
+
+        # Get user info and save to Firestore
+        try:
+            oauth2 = build("oauth2", "v2", credentials=creds)
+            info = oauth2.userinfo().get().execute()
+            self.db.save_user_info(uid, info)
+        except Exception as e:
+            # Log this error but don't fail the whole process
+            print(f"Error fetching user info: {e}")
+
         return creds
 
     def _build_service(self):
