@@ -54,7 +54,24 @@ export default function ExtensionPopup() {
       'Authorization': `Bearer ${token}`,
     };
     const response = await fetch(url, { ...options, headers });
-    // ... handle response
+
+    if (!response.ok) {
+      // Attempt to parse error details from the server, but fallback to status text
+      let errorDetail = response.statusText;
+      try {
+        const errorData = await response.json();
+        errorDetail = errorData.detail || errorDetail;
+      } catch (e) {
+        // Ignore if the error response is not JSON
+      }
+      throw new Error(`Request failed: ${response.status} ${errorDetail}`);
+    }
+
+    // Handle cases with no content
+    if (response.status === 204) {
+      return null;
+    }
+
     return response.json();
   }
 

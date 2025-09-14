@@ -1,9 +1,17 @@
-import iconUrl from "../icons/icon.png";
+import React from "react";
 
-export default function Landing({ onGetStarted }) {
+// Correctly reference the icon from the public directory
+const iconUrl = "/icons/icon.png";
+
+function Landing({ onGetStarted }) {
   return (
     <div className="flex flex-col items-center text-center space-y-3">
-      <img src={iconUrl} alt="App icon" className="w-16 h-16 rounded" />
+      <img
+        alt="Extension icon"
+        className="mx-auto h-12 w-12"
+        src={iconUrl}
+      />
+      <h1 className="mt-4 text-2xl font-bold">Source Bruh?</h1>
       <p className="text-sm text-gray-600">Easily search through your images!</p>
       <button onClick={onGetStarted} className="px-3 py-2 bg-black text-white rounded-md w-full">
         Get Started
@@ -11,3 +19,5 @@ export default function Landing({ onGetStarted }) {
     </div>
   );
 }
+
+export default Landing;

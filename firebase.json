@@ -12,22 +12,5 @@
       ],
       "runtime": "python311"
     }
-  ],
-  "hosting": {
-    "public": "frontend/dist",
-    "ignore": [
-      "firebase.json",
-      "**/.*",
-      "**/node_modules/**"
-    ],
-    "rewrites": [
-      {
-        "source": "/api/**",
-        "function": {
-          "functionId": "api",
-          "region": "us-central1"
-        }
-      }
-    ]
-  }
+  ]
 }

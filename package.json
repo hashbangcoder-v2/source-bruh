@@ -4,5 +4,9 @@
   "private": true,
   "workspaces": [
     "frontend"
-  ]
+  ],
+  "devDependencies": {
+    "buffer": "^6.0.3",
+    "process": "^0.11.10"
+  }
 }
