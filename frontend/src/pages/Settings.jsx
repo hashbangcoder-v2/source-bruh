@@ -3,11 +3,15 @@ import { auth } from "../firebase";
 import { signOut, onAuthStateChanged } from "firebase/auth";
 import { LogIn, LogOut, Edit3, Check, X } from "lucide-react";
 import extCfg from "../extension-config.json";
+import { makeAuthenticatedRequest } from "../api";
 
 // Path to the offscreen document
 const OFFSCREEN_DOCUMENT_PATH = '/offscreen.html';
 
 async function hasOffscreenDocument() {
+    if (typeof chrome === 'undefined' || !chrome.runtime) {
+        return false;
+    }
     if ('getContexts' in chrome.runtime) {
         const contexts = await chrome.runtime.getContexts({
             contextTypes: ['OFFSCREEN_DOCUMENT'],
@@ -22,6 +26,9 @@ async function hasOffscreenDocument() {
 }
 
 async function createOffscreenDocument() {
+    if (typeof chrome === 'undefined' || !chrome.offscreen) {
+        return;
+    }
     if (!await hasOffscreenDocument()) {
         await chrome.offscreen.createDocument({
             url: chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH),
@@ -51,8 +58,10 @@ function Settings() {
           try {
             const settings = await makeAuthenticatedRequest("/settings");
             if (settings) {
-              setAlbumUrl(settings.album_url || "");
-              setGeminiKeySet(settings.gemini_key_set || false);
+              const normalized = settings.album_url || "";
+              setAlbumUrl(normalized);
+              setAlbumUrlDraft(normalized);
+              setGeminiPresent(settings.gemini_key_set || false);
             }
           } catch (error) {
             console.error("Failed to fetch settings:", error);
@@ -67,6 +76,9 @@ function Settings() {
 
   // Set up a listener for messages from the offscreen document
   useEffect(() => {
+      if (typeof chrome === 'undefined' || !chrome.runtime?.onMessage) {
+          return undefined;
+      }
       const messageListener = (message) => {
           if (message.type === 'firebase-login-success') {
               console.log('Login successful:', message.payload);
@@ -84,6 +96,10 @@ function Settings() {
   }, []);
 
   const handleLogin = async () => {
+    if (typeof chrome === 'undefined') {
+      console.error('Chrome APIs unavailable');
+      return;
+    }
     // Create the offscreen document if it doesn't exist
     await createOffscreenDocument();
 
@@ -99,8 +115,32 @@ function Settings() {
     }
   };
 
-  // Placeholder functions for saving data. These will need to be updated.
-  const saveAlbumUrl = () => setEditAlbum(false);
+  const normalizeAlbumPath = (value) => {
+    const trimmed = (value || "").trim();
+    if (!trimmed) return "";
+    try {
+      const parsed = new URL(trimmed);
+      const path = parsed.pathname.replace(/\/+/g, "/").replace(/^\//, "").replace(/\/$/, "");
+      return path;
+    } catch (error) {
+      return trimmed.replace(/^\//, "").replace(/\/$/, "");
+    }
+  };
+
+  const saveAlbumUrl = async () => {
+    const normalized = normalizeAlbumPath(albumUrlDraft);
+    try {
+      await makeAuthenticatedRequest("/settings/album-url", {
+        method: "POST",
+        body: JSON.stringify({ album_url: normalized }),
+      });
+      setAlbumUrl(normalized);
+      setAlbumUrlDraft(normalized);
+      setEditAlbum(false);
+    } catch (error) {
+      console.error("Failed to save album path", error);
+    }
+  };
   const saveGeminiKey = () => setEditKey(false);
 
   return (
@@ -133,7 +173,7 @@ function Settings() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && editAlbum) saveAlbumUrl();
               }}
-              placeholder="https://photos.app.goo.gl/..."
+              placeholder="album/your-album-id"
               className="input"
               disabled={!editAlbum}
             />

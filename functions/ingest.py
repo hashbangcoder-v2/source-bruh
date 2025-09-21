@@ -1,13 +1,22 @@
+import datetime
+import hashlib
 import io
 import os
-from typing import List
+import urllib.parse
+from typing import Iterable, List, Optional
 
 from PIL import Image
 
-from config_loader import load_config
-from db import Database
-from photos_client import GooglePhotosClient
-from llm import GeminiClient
+try:  # pragma: no cover - allow running as module or script
+    from .config_loader import load_config
+    from .db import FirestoreDB
+    from .photos_client import GooglePhotosClient
+    from .llm import GeminiClient
+except ImportError:  # pragma: no cover
+    from config_loader import load_config
+    from db import FirestoreDB
+    from photos_client import GooglePhotosClient
+    from llm import GeminiClient
 
 
 def create_thumbnail(image_bytes: bytes, max_size: int = 320) -> bytes:
@@ -23,48 +32,152 @@ def ensure_dirs(*dirs: List[str]) -> None:
         os.makedirs(d, exist_ok=True)
 
 
-def ingest_once(config_path: str = None) -> None:
+def _coerce_list(values: Optional[Iterable[str]]) -> List[str]:
+    if not values:
+        return []
+    if isinstance(values, str):
+        return [values]
+    return [v for v in values if v]
+
+
+def _normalize_album_path(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return raw
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except ValueError:
+        return raw.lstrip("/")
+    if parsed.scheme and parsed.netloc:
+        path = parsed.path.rstrip("/")
+        return path.lstrip("/")
+    return raw.lstrip("/")
+
+
+def _parse_creation_time(value: Optional[str]) -> Optional[datetime.datetime]:
+    if not value:
+        return None
+    try:
+        cleaned = value.strip()
+        if cleaned.endswith("Z"):
+            cleaned = cleaned[:-1] + "+00:00"
+        return datetime.datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
+
+
+def ingest_once(
+    config_path: Optional[str] = None,
+    *,
+    db: Optional[FirestoreDB] = None,
+    photos_client: Optional[GooglePhotosClient] = None,
+    gemini_client: Optional[GeminiClient] = None,
+    user_id: Optional[str] = None,
+) -> None:
     cfg = load_config(config_path)
 
-    images_dir = cfg["storage"]["images_dir"]
-    thumbs_dir = cfg["storage"]["thumbs_dir"]
+    storage_cfg = cfg.get("storage", {})
+    images_dir = storage_cfg.get("images_dir", "data/images")
+    thumbs_dir = storage_cfg.get("thumbs_dir", "data/thumbs")
     ensure_dirs(images_dir, thumbs_dir)
 
-    db = Database(cfg["db"]["path"], cfg["db"]["dimension"])
-    photos = GooglePhotosClient(
-        client_secret_path=cfg["google_photos"]["client_secret_path"],
-        scopes=cfg["google_photos"]["scopes"],
-        redirect_port=cfg["google_photos"]["redirect_port"],
-        token_store=cfg["google_photos"].get("token_store"),
-    )
-    gemini = GeminiClient(
-        api_key_env=cfg["llm"]["api_key_env"],
-        oracle_model=cfg["llm"]["oracle_model"],
-        embedding_model=cfg["llm"]["embedding_model"],
-    )
+    db_cfg = cfg.get("db", {})
+    resolved_user_id = user_id or db_cfg.get("user_id") or "default"
 
-    albums = cfg["google_photos"].get("albums", [])
-    max_size = cfg["storage"]["max_download_size"]
+    if db is None:
+        service_account = db_cfg.get("service_account_key_path")
+        if not service_account:
+            raise RuntimeError("Firestore service account key path must be configured under db.service_account_key_path")
+        db = FirestoreDB(service_account)
 
-    for album_title in albums:
-        album = photos.get_album_by_title(album_title)
-        if not album:
+    photos_cfg = cfg.get("google_photos", {})
+    if photos_client is None:
+        photos_client = GooglePhotosClient(
+            client_secret_path=photos_cfg.get("client_secret_path"),
+            scopes=photos_cfg.get("scopes", []),
+            redirect_port=int(photos_cfg.get("redirect_port", 1008)),
+            token_store=photos_cfg.get("token_store"),
+            oauth_client=photos_cfg.get("oauth_client"),
+            db=db,
+            user_id=resolved_user_id,
+        )
+
+    if gemini_client is None:
+        llm_cfg = cfg.get("llm", {})
+        gemini_client = GeminiClient(
+            api_key_env=llm_cfg.get("api_key_env", "GOOGLE_API_KEY"),
+            oracle_model=llm_cfg.get("oracle_model", "gemini-1.5-flash-latest"),
+            embedding_model=llm_cfg.get("embedding_model", "text-embedding-004"),
+        )
+
+    max_size = storage_cfg.get("max_download_size", "w2048-h2048")
+
+    album_paths = []
+    for raw in _coerce_list(photos_cfg.get("album_paths")):
+        normalized = _normalize_album_path(raw)
+        if normalized:
+            album_paths.append(normalized)
+    for raw in _coerce_list(photos_cfg.get("album_url")):
+        normalized = _normalize_album_path(raw)
+        if normalized:
+            album_paths.append(normalized)
+
+    album_entries: List[tuple[dict, Optional[str]]] = []
+    for album_path in album_paths:
+        album = photos_client.get_album_by_path(album_path)
+        if album:
+            album_entries.append((album, album_path))
+
+    fallback_titles = _coerce_list(photos_cfg.get("albums", []))
+    for album_title in fallback_titles:
+        album = photos_client.get_album_by_title(album_title)
+        if album:
+            album_entries.append((album, None))
+
+    seen_albums: set[str] = set()
+    for album, configured_path in album_entries:
+        album_id = album.get("id")
+        if not album_id or album_id in seen_albums:
             continue
-        album_id = album["id"]
-        for item in photos.iter_media_items_in_album(album_id):
+        seen_albums.add(album_id)
+        album_title = album.get("title")
+        last_timestamp: Optional[datetime.datetime] = None
+        if hasattr(db, "get_latest_media_timestamp"):
+            try:
+                last_timestamp = db.get_latest_media_timestamp(resolved_user_id, album_title=album_title)
+            except Exception:
+                last_timestamp = None
+
+        product_url = album.get("productUrl", "")
+        product_path = _normalize_album_path(product_url) if product_url else None
+
+        for item in photos_client.iter_media_items_in_album(album_id):
             if not item.get("mimeType", "").startswith("image/"):
                 continue
+
             media_id = item.get("id")
-            if media_id and db.has_image_by_media_id(media_id):
+            if not media_id:
+                continue
+
+            if hasattr(db, "has_media_item") and db.has_media_item(resolved_user_id, media_id):
                 continue
 
             base_url = item.get("baseUrl")
-            filename = item.get("filename", f"{media_id}.jpg")
-            timestamp = item.get("mediaMetadata", {}).get("creationTime")
-            width = int(item.get("mediaMetadata", {}).get("width", 0) or 0)
-            height = int(item.get("mediaMetadata", {}).get("height", 0) or 0)
+            if not base_url:
+                continue
 
-            image_bytes = photos.download_image_bytes(base_url, max_size)
+            filename = item.get("filename") or f"{media_id}.jpg"
+            metadata = item.get("mediaMetadata", {}) or {}
+            timestamp_raw = metadata.get("creationTime")
+            timestamp_dt = _parse_creation_time(timestamp_raw)
+            if timestamp_dt is None:
+                timestamp_dt = datetime.datetime.fromtimestamp(0, datetime.timezone.utc)
+            if last_timestamp and timestamp_dt <= last_timestamp:
+                continue
+            width = int(metadata.get("width", 0) or 0)
+            height = int(metadata.get("height", 0) or 0)
+
+            image_bytes = photos_client.download_image_bytes(base_url, max_size)
             thumb_bytes = create_thumbnail(image_bytes)
 
             file_path = os.path.join(images_dir, filename)
@@ -74,21 +187,36 @@ def ingest_once(config_path: str = None) -> None:
             with open(thumb_path, "wb") as f:
                 f.write(thumb_bytes)
 
-            description = gemini.describe_image(image_bytes)
-            embedding = gemini.embed_text(description)
+            description = gemini_client.describe_image(image_bytes) if gemini_client else ""
+            embedding = gemini_client.embed_text(description) if gemini_client and description else []
 
-            rowid = db.upsert_image(
-                google_media_id=media_id,
-                album_title=album_title,
-                file_path=file_path,
-                thumb_path=thumb_path,
-                timestamp=timestamp,
-                width=width,
-                height=height,
-                sha256=None,
-                description=description,
+            db.upsert_media_item(
+                resolved_user_id,
+                media_id,
+                {
+                    "google_media_id": media_id,
+                    "album_title": album_title,
+                    "album_path": configured_path or product_path,
+                    "album_product_url": product_url,
+                    "file_path": file_path,
+                    "thumb_path": thumb_path,
+                    "timestamp": timestamp_dt,
+                    "timestamp_iso": timestamp_raw,
+                    "width": width,
+                    "height": height,
+                    "sha256": hashlib.sha256(image_bytes).hexdigest(),
+                    "description": description,
+                    "embedding": embedding,
+                    "mime_type": item.get("mimeType"),
+                    "filename": filename,
+                    "source_base_url": base_url,
+                    "image_bytes": image_bytes,
+                    "thumbnail_bytes": thumb_bytes,
+                },
             )
-            db.insert_or_replace_vector(rowid, embedding)
+
+            if last_timestamp is None or timestamp_dt > last_timestamp:
+                last_timestamp = timestamp_dt
 
 
 if __name__ == "__main__":
