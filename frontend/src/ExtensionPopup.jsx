@@ -19,6 +19,10 @@ export default function ExtensionPopup() {
   const serverBase = extCfg.serverBaseUrl;
 
   useEffect(() => {
+    const hasChrome = typeof chrome !== "undefined" && chrome?.storage?.local;
+    if (hasChrome) {
+      chrome.storage.local.set({ serverBaseUrl: serverBase });
+    }
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const token = await user.getIdToken();
@@ -26,8 +30,14 @@ export default function ExtensionPopup() {
         // For example, in a context or a global state management library.
         // For simplicity here, we can store it in localStorage, though this is not the most secure method for extensions.
         localStorage.setItem('firebaseIdToken', token);
+        if (hasChrome) {
+          chrome.storage.local.set({ firebaseIdToken: token });
+        }
       } else {
         localStorage.removeItem('firebaseIdToken');
+        if (hasChrome) {
+          chrome.storage.local.remove('firebaseIdToken');
+        }
       }
       setUser(user);
     });

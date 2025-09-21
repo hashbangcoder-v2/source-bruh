@@ -1,6 +1,8 @@
+import datetime
+from typing import Any, Dict, List, Optional
+
 import firebase_admin
 from firebase_admin import credentials, firestore
-from typing import List, Dict, Any, Optional
 from google.oauth2.credentials import Credentials
 
 class FirestoreDB:
@@ -10,14 +12,57 @@ class FirestoreDB:
             firebase_admin.initialize_app(cred)
         self.db = firestore.client()
 
+    def _images_collection(self, user_id: str):
+        return self.db.collection('users').document(user_id).collection('images')
+
     def add_image_data(self, user_id: str, image_data: Dict[str, Any]):
-        # Store image data in a user-specific collection
-        self.db.collection('users').document(user_id).collection('images').add(image_data)
+        media_id = image_data.get('google_media_id')
+        if media_id:
+            self.upsert_media_item(user_id, media_id, image_data)
+            return
+        # Store image data in a user-specific collection when no explicit id is provided
+        self._images_collection(user_id).add(image_data)
+
+    def has_media_item(self, user_id: str, media_id: str) -> bool:
+        doc = self._images_collection(user_id).document(media_id).get()
+        return doc.exists
+
+    def upsert_media_item(self, user_id: str, media_id: str, image_data: Dict[str, Any]) -> str:
+        payload = dict(image_data)
+        payload['google_media_id'] = media_id
+        doc_ref = self._images_collection(user_id).document(media_id)
+        doc_ref.set(payload, merge=True)
+        return doc_ref.id
+
+    def get_latest_media_timestamp(self, user_id: str, album_title: Optional[str] = None) -> Optional[datetime.datetime]:
+        collection = self._images_collection(user_id)
+        query = collection
+        if album_title:
+            query = query.where('album_title', '==', album_title)
+        try:
+            docs = (
+                query.order_by('timestamp', direction=firestore.Query.DESCENDING)
+                .limit(1)
+                .stream()
+            )
+        except Exception:
+            return None
+        for doc in docs:
+            data = doc.to_dict() or {}
+            ts = data.get('timestamp')
+            if isinstance(ts, datetime.datetime):
+                return ts
+            if isinstance(ts, str):
+                try:
+                    return datetime.datetime.fromisoformat(ts)
+                except ValueError:
+                    continue
+        return None
 
     def search_vectors(self, user_id: str, query_vector: List[float], top_k: int) -> List[Dict[str, Any]]:
         # This is a simplified search. For production, you'd use a dedicated vector search service
         # or Firestore's upcoming vector search capabilities.
-        images_ref = self.db.collection('users').document(user_id).collection('images')
+        images_ref = self._images_collection(user_id)
         all_images = images_ref.stream()
 
         # This is a placeholder for actual vector search logic

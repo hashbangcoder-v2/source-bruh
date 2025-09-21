@@ -9,6 +9,12 @@ export default defineConfig({
       input: {
         popup: new URL('./popup.html', import.meta.url).pathname,
         offscreen: new URL('./offscreen.html', import.meta.url).pathname,
+        background: new URL('./src/background.js', import.meta.url).pathname,
+      },
+      output: {
+        entryFileNames: '[name].js',
+        chunkFileNames: 'chunks/[name].js',
+        assetFileNames: 'assets/[name][extname]',
       },
     },
   },
