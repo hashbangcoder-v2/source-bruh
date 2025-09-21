@@ -1,6 +1,7 @@
-from typing import Any, Dict, List, Optional
 import json
 import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +28,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 
 class SearchResponseItem(BaseModel):
-    image_rowid: int
+    image_rowid: str
     distance: float
     description: Optional[str]
     album_title: Optional[str]
@@ -41,7 +42,8 @@ class SettingsResponse(BaseModel):
 
 
 def create_app(config_path: str = None) -> FastAPI:
-    cfg = load_config(config_path)
+    config_file = Path(config_path) if config_path else Path(__file__).with_name("config.yaml")
+    cfg = load_config(os.fspath(config_file))
     app = FastAPI()
 
     app.add_middleware(
@@ -52,7 +54,7 @@ def create_app(config_path: str = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    cfg_path = os.environ.get("SOURCE_BRUH_CONFIG") or os.fspath(__import__("pathlib").Path.cwd() / "backend" / "config.yaml")
+    cfg_path = os.environ.get("SOURCE_BRUH_CONFIG") or os.fspath(config_file)
     db = FirestoreDB(cfg["db"]["service_account_key_path"])
     gemini_client: GeminiClient | None = None
 
@@ -82,31 +84,34 @@ def create_app(config_path: str = None) -> FastAPI:
         if client is None:
             raise HTTPException(status_code=400, detail="Gemini API key not set. Update it in Settings.")
         emb = client.embed_text(q)
-        rows = db.search(emb, top_k=top_k)
-        base_thumb = "/image/{}?thumb=1"
+        rows = db.search(emb, top_k=top_k, user_id=user.get("uid"))
         results: List[SearchResponseItem] = []
         for r in rows:
+            image_id = str(r.get("image_rowid"))
+            thumb_url = r.get("thumb_url") or ""
+            if not thumb_url:
+                if r.get("thumb_path") or r.get("thumb_bytes"):
+                    thumb_url = app.url_path_for("get_image", image_rowid=image_id) + "?thumb=1"
+                elif r.get("image_url"):
+                    thumb_url = str(r["image_url"])
             results.append(
                 SearchResponseItem(
-                    image_rowid=int(r["image_rowid"]),
+                    image_rowid=image_id,
                     distance=float(r["distance"]),
-                    description=r["description"],
-                    album_title=r["album_title"],
-                    timestamp=r["timestamp"],
-                    thumb_url=base_thumb.format(int(r["image_rowid"]))
+                    description=r.get("description"),
+                    album_title=r.get("album_title"),
+                    timestamp=r.get("timestamp"),
+                    thumb_url=thumb_url,
                 )
             )
         return results
 
     @app.get("/image/{image_rowid}")
-    def get_image(image_rowid: int, thumb: int = 0):
-        file_path, thumb_path = db.get_image_paths(image_rowid)
-        target = thumb_path if thumb == 1 and thumb_path else file_path
-        if not target or not os.path.exists(target):
+    def get_image(image_rowid: str, thumb: int = 0):
+        blob, mime_type = db.get_image_blob(image_rowid, prefer_thumb=thumb == 1)
+        if blob is None:
             raise HTTPException(status_code=404, detail="Image not found")
-        with open(target, "rb") as f:
-            data = f.read()
-        return Response(content=data, media_type="image/jpeg")
+        return Response(content=blob, media_type=mime_type or "image/jpeg")
 
     @app.get("/settings", response_model=SettingsResponse)
     async def get_settings(user: dict = Depends(get_current_user)):
