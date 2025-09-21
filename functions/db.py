@@ -1,10 +1,5 @@
-from __future__ import annotations
-
-import base64
-import math
-import os
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+import datetime
+from typing import Any, Dict, List, Optional
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -12,111 +7,75 @@ from google.oauth2.credentials import Credentials
 
 
 class FirestoreDB:
-    """Small Firestore wrapper that also supports an in-memory fallback.
+    def __init__(self, service_account_key_path: str):
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(service_account_key_path)
+            firebase_admin.initialize_app(cred)
+        self.db = firestore.client()
 
-    The production deployment stores image metadata and embeddings inside
-    Firestore.  For tests (or local development without credentials) we fall
-    back to an in-memory store that mimics the Firestore API used by the
-    server.  Image binaries can be provided either as raw bytes (``image_bytes``
-    / ``thumb_bytes``) or as local file paths.  When only file paths are
-    available the server reads from disk.
-    """
+    def _images_collection(self, user_id: str):
+        return self.db.collection('users').document(user_id).collection('images')
 
-    _IMAGES_COLLECTION = "images"
+    def add_image_data(self, user_id: str, image_data: Dict[str, Any]):
+        media_id = image_data.get('google_media_id')
+        if media_id:
+            self.upsert_media_item(user_id, media_id, image_data)
+            return
+        # Store image data in a user-specific collection when no explicit id is provided
+        self._images_collection(user_id).add(image_data)
 
-    def __init__(self, service_account_key_path: Optional[str]):
-        self._service_account_key_path = service_account_key_path
-        self._local_images: Dict[str, Dict[str, Any]] = {}
-        self._local_users: Dict[str, Dict[str, Any]] = {}
-        self._use_firestore = False
+    def has_media_item(self, user_id: str, media_id: str) -> bool:
+        doc = self._images_collection(user_id).document(media_id).get()
+        return doc.exists
 
-        key_path = Path(service_account_key_path) if service_account_key_path else None
-        if key_path and key_path.exists():
-            if not firebase_admin._apps:
-                cred = credentials.Certificate(os.fspath(key_path))
-                firebase_admin.initialize_app(cred)
-            self.db = firestore.client()
-            self._use_firestore = True
-        else:
-            # Fall back to an in-memory store when credentials are missing.
-            self.db = None
+    def upsert_media_item(self, user_id: str, media_id: str, image_data: Dict[str, Any]) -> str:
+        payload = dict(image_data)
+        payload['google_media_id'] = media_id
+        doc_ref = self._images_collection(user_id).document(media_id)
+        doc_ref.set(payload, merge=True)
+        return doc_ref.id
 
-    # ------------------------------------------------------------------
-    # Image helpers
-    # ------------------------------------------------------------------
-    def add_image_data(self, image_data: Dict[str, Any], user_id: Optional[str] = None) -> str:
-        """Persist metadata for an image and return its identifier."""
+    def get_latest_media_timestamp(self, user_id: str, album_title: Optional[str] = None) -> Optional[datetime.datetime]:
+        collection = self._images_collection(user_id)
+        query = collection
+        if album_title:
+            query = query.where('album_title', '==', album_title)
+        try:
+            docs = (
+                query.order_by('timestamp', direction=firestore.Query.DESCENDING)
+                .limit(1)
+                .stream()
+            )
+        except Exception:
+            return None
+        for doc in docs:
+            data = doc.to_dict() or {}
+            ts = data.get('timestamp')
+            if isinstance(ts, datetime.datetime):
+                return ts
+            if isinstance(ts, str):
+                try:
+                    return datetime.datetime.fromisoformat(ts)
+                except ValueError:
+                    continue
+        return None
 
-        data = dict(image_data)
-        if user_id:
-            data.setdefault("user_id", user_id)
+    def search_vectors(self, user_id: str, query_vector: List[float], top_k: int) -> List[Dict[str, Any]]:
+        # This is a simplified search. For production, you'd use a dedicated vector search service
+        # or Firestore's upcoming vector search capabilities.
+        images_ref = self._images_collection(user_id)
+        all_images = images_ref.stream()
 
-        embedding = data.get("embedding")
-        if embedding is not None:
-            data["embedding"] = [float(x) for x in embedding]
+        # This is a placeholder for actual vector search logic
+        # In a real app, you would not pull all documents and compare locally.
+        results = []
+        for img in all_images:
+            img_dict = img.to_dict()
+            # Faking distance calculation
+            img_dict['distance'] = 0.5 
+            results.append(img_dict)
 
-        image_id = data.pop("image_id", None) or data.get("image_rowid")
-        image_id = str(image_id) if image_id is not None else None
-
-        if self._use_firestore:
-            images_ref = self.db.collection(self._IMAGES_COLLECTION)
-            if image_id:
-                doc_ref = images_ref.document(image_id)
-            else:
-                doc_ref = images_ref.document()
-                image_id = doc_ref.id
-            data.setdefault("image_rowid", image_id)
-            doc_ref.set(data)
-        else:
-            if image_id is None:
-                image_id = str(len(self._local_images) + 1)
-            data.setdefault("image_rowid", image_id)
-            self._local_images[image_id] = data
-
-        return image_id
-
-    def search(self, query_vector: List[float], top_k: int = 20, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Return the ``top_k`` closest matches for ``query_vector``."""
-
-        return self.search_vectors(query_vector=query_vector, top_k=top_k, user_id=user_id)
-
-    def search_vectors(
-        self, query_vector: List[float], top_k: int, user_id: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        results: List[Dict[str, Any]] = []
-
-        for doc_id, data in self._iter_image_documents(user_id=user_id):
-            embedding = data.get("embedding")
-            if not embedding:
-                continue
-            distance = self._cosine_distance(query_vector, embedding)
-            if math.isinf(distance):
-                continue
-            record = {
-                "image_rowid": data.get("image_rowid") or doc_id,
-                "distance": distance,
-                "description": data.get("description"),
-                "album_title": data.get("album_title"),
-                "timestamp": data.get("timestamp"),
-                "thumb_path": data.get("thumb_path"),
-                "thumb_url": data.get("thumb_url"),
-                "file_path": data.get("file_path"),
-                "image_url": data.get("image_url"),
-                "user_id": data.get("user_id"),
-            }
-            results.append(record)
-
-        results.sort(key=lambda item: item["distance"])
-        return results[:top_k]
-
-    def get_image_paths(self, image_id: str | int) -> Tuple[Optional[str], Optional[str]]:
-        """Return file paths for an image and its thumbnail, if present."""
-
-        doc = self._get_image_document(image_id)
-        if not doc:
-            return None, None
-        return doc.get("file_path"), doc.get("thumb_path")
-
+        return sorted(results, key=lambda x: x['distance'])[:top_k]
     def get_image_blob(self, image_id: str | int, prefer_thumb: bool = False) -> Tuple[Optional[bytes], Optional[str]]:
         """Return raw image bytes and mime type for ``image_id``.
 
