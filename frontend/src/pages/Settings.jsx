@@ -1,9 +1,37 @@
-import { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
+import { auth } from "../firebase";
+import { signOut, onAuthStateChanged } from "firebase/auth";
+import { LogIn, LogOut, Edit3, Check, X } from "lucide-react";
 import extCfg from "../extension-config.json";
-import { auth, googleProvider } from "../firebase";
-import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 
-export default function Settings() {
+// Path to the offscreen document
+const OFFSCREEN_DOCUMENT_PATH = '/offscreen.html';
+
+async function hasOffscreenDocument() {
+    if ('getContexts' in chrome.runtime) {
+        const contexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT'],
+            documentUrls: [chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH)]
+        });
+        return contexts.length > 0;
+    } else {
+        // Fallback for older browsers
+        const views = chrome.extension.getViews({ type: 'OFFSCREEN_DOCUMENT' });
+        return views.length > 0;
+    }
+}
+
+async function createOffscreenDocument() {
+    if (!await hasOffscreenDocument()) {
+        await chrome.offscreen.createDocument({
+            url: chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH),
+            reasons: ['LOCAL_STORAGE'],
+            justification: 'Firebase OAuth needs to persist credentials in local storage.',
+        });
+    }
+}
+
+function Settings() {
   const [user, setUser] = useState(null);
   const [albumUrl, setAlbumUrl] = useState("");
   const [albumUrlDraft, setAlbumUrlDraft] = useState("");
@@ -19,18 +47,48 @@ export default function Settings() {
       setUser(currentUser);
       if (currentUser) {
         // Fetch settings from your backend after user is logged in
-        // This part will be updated once the backend is on Cloud Run
+        const fetchSettings = async () => {
+          try {
+            const settings = await makeAuthenticatedRequest("/settings");
+            if (settings) {
+              setAlbumUrl(settings.album_url || "");
+              setGeminiKeySet(settings.gemini_key_set || false);
+            }
+          } catch (error) {
+            console.error("Failed to fetch settings:", error);
+            // Optionally, show an error to the user
+          }
+        };
+        fetchSettings();
       }
     });
     return () => unsubscribe();
   }, []);
 
+  // Set up a listener for messages from the offscreen document
+  useEffect(() => {
+      const messageListener = (message) => {
+          if (message.type === 'firebase-login-success') {
+              console.log('Login successful:', message.payload);
+              // The onAuthStateChanged listener will handle the UI update
+          } else if (message.type === 'firebase-login-failure') {
+              console.error('Login failed:', message.payload);
+              // Optionally, show an error message to the user
+          }
+      };
+      chrome.runtime.onMessage.addListener(messageListener);
+
+      return () => {
+          chrome.runtime.onMessage.removeListener(messageListener);
+      };
+  }, []);
+
   const handleLogin = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (error) {
-      console.error("Error during sign-in:", error);
-    }
+    // Create the offscreen document if it doesn't exist
+    await createOffscreenDocument();
+
+    // Send a message to the offscreen document to start the auth flow
+    chrome.runtime.sendMessage({ type: 'firebase-login' });
   };
 
   const handleLogout = async () => {
@@ -123,3 +181,5 @@ export default function Settings() {
     </div>
   );
 }
+
+export default Settings;

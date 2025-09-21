@@ -4,8 +4,7 @@ __pycache__/
 *$py.class
 .firebase/
 
-# C extensions
-*.so
+*.log
 
 # Distribution / packaging
 .Python

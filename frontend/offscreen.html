@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      This meta tag sets a specific Content Security Policy for this document,
+      allowing it to load the necessary scripts from Google's APIs for Firebase Auth.
+      This is the recommended approach for Manifest V3 extensions.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="script-src 'self' https://apis.google.com;"
+    />
+  </head>
+  <body>
+    <!-- This script will handle the Firebase auth flow -->
+    <script type="module" src="./src/offscreen.js"></script>
+  </body>
+</html>

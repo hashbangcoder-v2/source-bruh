@@ -7,10 +7,12 @@ import Settings from "./pages/Settings";
 import extCfg from "./extension-config.json";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
+import { makeAuthenticatedRequest } from "./api";
 
 export default function ExtensionPopup() {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState([]);
+  const [searchResults, setSearchResults] = useState([]);
+  const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [view, setView] = useState("landing");
@@ -27,73 +29,49 @@ export default function ExtensionPopup() {
       } else {
         localStorage.removeItem('firebaseIdToken');
       }
+      setUser(user);
     });
     return () => unsubscribe();
   }, []);
 
-  async function onSearch() {
+  async function onSearch(query) {
     setError("");
     setLoading(true);
     try {
-      const params = new URLSearchParams({ q: query, top_k: "20" });
-      const resp = await fetch(`${serverBase}/search?${params.toString()}`);
-      if (!resp.ok) throw new Error(`Search failed: ${resp.status}`);
-      const data = await resp.json();
-      setResults(data);
-    } catch (e) {
+      setView("Results");
+      const results = await makeAuthenticatedRequest(`/search?q=${query}`);
+      setSearchResults(results);
+    } catch (error) {
       setError("Failed to search. Is the local server running?");
+      setView("Query"); // Go back to query view on error
     } finally {
       setLoading(false);
     }
   }
 
-  async function makeAuthenticatedRequest(url, options = {}) {
-    const token = localStorage.getItem('firebaseIdToken');
-    const headers = {
-      ...options.headers,
-      'Authorization': `Bearer ${token}`,
-    };
-    const response = await fetch(url, { ...options, headers });
-
-    if (!response.ok) {
-      // Attempt to parse error details from the server, but fallback to status text
-      let errorDetail = response.statusText;
-      try {
-        const errorData = await response.json();
-        errorDetail = errorData.detail || errorDetail;
-      } catch (e) {
-        // Ignore if the error response is not JSON
+  const checkReadinessAndRoute = async () => {
+    try {
+      // No need to check local storage for token, auth state is the source of truth
+      if (!user) {
+        setView("Landing");
+        return;
       }
-      throw new Error(`Request failed: ${response.status} ${errorDetail}`);
-    }
 
-    // Handle cases with no content
-    if (response.status === 204) {
-      return null;
-    }
+      const settings = await makeAuthenticatedRequest("/settings");
 
-    return response.json();
-  }
+      if (settings && settings.album_url && settings.gemini_key_set) {
+        setView("Query");
+      } else {
+        setView("Landing");
+      }
+    } catch (error) {
+      console.error("Failed to check readiness:", error);
+      setView("Landing"); // Fallback to landing on error
+    }
+  };
 
   function goFromLanding() {
-    // Require auth + sources + key. If missing, go to settings first.
     checkReadinessAndRoute();
-  }
-
-  async function checkReadinessAndRoute(direction = "forward") {
-    try {
-      const r = await fetch(`${serverBase}/settings`);
-      const s = await r.json();
-      const ready = Boolean(s.user) && Boolean(s.album_url) && Boolean(s.gemini_key_present);
-      if (direction === "back") {
-        setView(ready ? "query" : "landing");
-      } else {
-        setView(ready ? "query" : "settings");
-      }
-    } catch (e) {
-      // If server not reachable, assume not ready.
-      setView(direction === "back" ? "landing" : "settings");
-    }
   }
 
   return (
@@ -119,7 +97,7 @@ export default function ExtensionPopup() {
         <>
           <Query query={query} setQuery={setQuery} onSearch={onSearch} loading={loading} />
           {error && <div className="text-red-600 text-sm">{error}</div>}
-          <Results results={results} />
+          <Results results={searchResults} />
         </>
       )}
       {view === "settings" && <Settings />}

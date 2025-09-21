@@ -9,7 +9,11 @@
   },
   "host_permissions": [
     "https://us-central1-source-bruh.cloudfunctions.net/*"
-  ]
+  ],
+  "permissions": ["offscreen"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
 }
 
 
