@@ -1,6 +1,16 @@
 import { Search } from "lucide-react";
 
 export default function Query({ query, setQuery, onSearch, loading }) {
+  const trimmedQuery = query?.trim() ?? "";
+
+  const handleSearch = () => {
+    if (!trimmedQuery || loading) {
+      return;
+    }
+
+    onSearch(query);
+  };
+
   return (
     <div className="space-y-3">
       <div className="flex space-x-2">
@@ -9,9 +19,19 @@ export default function Query({ query, setQuery, onSearch, loading }) {
           placeholder="Describe the chart, infographic, or topic"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              handleSearch();
+            }
+          }}
           className="flex-grow p-2 border border-gray-300 rounded-md"
         />
-        <button className="p-2 bg-black text-white rounded-md" onClick={onSearch} disabled={loading}>
+        <button
+          className="p-2 bg-black text-white rounded-md"
+          onClick={handleSearch}
+          disabled={loading || !trimmedQuery}
+        >
           <Search className="h-4 w-4" />
         </button>
       </div>
