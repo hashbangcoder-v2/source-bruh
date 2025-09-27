@@ -1,3 +1,4 @@
+
 from typing import Any, Dict, List, Optional, Mapping
 import os
 import requests
@@ -8,9 +9,12 @@ import urllib.parse
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 import json
-from db import FirestoreDB
-from omegaconf import DictConfig
+try:  # pragma: no cover
+    from .db import FirestoreDB
+except ImportError:  # pragma: no cover
+    from db import FirestoreDB
 
 
 class GooglePhotosClient:
@@ -65,10 +69,14 @@ class GooglePhotosClient:
 
     def get_credentials_from_db(self, uid: str) -> Optional[Credentials]:
         """Gets user's Google Photos API credentials from Firestore."""
+        if not self.db:
+            return None
         return self.db.get_google_photos_credentials(uid)
 
     def get_user_info_from_db(self, uid: str) -> dict:
         """Gets user's info from Firestore."""
+        if not self.db:
+            return {}
         return self.db.get_user_info(uid)
 
     def get_credentials_from_code(self, code: str, uid: str) -> Credentials:
@@ -92,41 +100,26 @@ class GooglePhotosClient:
         flow.fetch_token(code=code, code_verifier=code_verifier)
         creds = flow.credentials
 
-        # Save credentials to Firestore
-        self.db.save_google_photos_credentials(uid, creds)
+        if self.db:
+            # Save credentials to Firestore
+            self.db.save_google_photos_credentials(uid, creds)
 
-        # Get user info and save to Firestore
-        try:
-            oauth2 = build("oauth2", "v2", credentials=creds)
-            info = oauth2.userinfo().get().execute()
-            self.db.save_user_info(uid, info)
-        except Exception as e:
-            # Log this error but don't fail the whole process
-            print(f"Error fetching user info: {e}")
+            # Get user info and save to Firestore
+            try:
+                oauth2 = build("oauth2", "v2", credentials=creds)
+                info = oauth2.userinfo().get().execute()
+                self.db.save_user_info(uid, info)
+            except Exception as e:
+                # Log this error but don't fail the whole process
+                print(f"Error fetching user info: {e}")
 
         return creds
 
     def _build_service(self):
-        creds = None
-        if self.token_store and os.path.exists(self.token_store):
-            try:
-                with open(self.token_store, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                creds = Credentials.from_authorized_user_info(data, scopes=self.scopes)
-            except Exception:
-                creds = None
-        if not creds or not creds.valid:
-            if self.client_secret_path and os.path.exists(self.client_secret_path):
-                flow = InstalledAppFlow.from_client_secrets_file(self.client_secret_path, self.scopes)
-                creds = flow.run_local_server(port=self.redirect_port)
-            else:
-                # Use PKCE flow for public clients (Chrome extensions)
-                if not self.oauth_client or not self.oauth_client.get("web", {}).get("client_id"):
-                    raise FileNotFoundError("Missing Google OAuth client credentials; set google_photos.oauth_client.web.client_id in config.yaml")
-                creds = self._authenticate_with_pkce()
-            if self.token_store:
-                with open(self.token_store, "w", encoding="utf-8") as f:
-                    f.write(creds.to_json())
+        creds = self._credentials or self._load_credentials_from_db() or self._load_credentials_from_token_store()
+        creds = self._ensure_credentials(creds)
+        self._credentials = creds
+        self._persist_credentials(creds)
         svc = build('photoslibrary', 'v1', credentials=creds, static_discovery=False)
         try:
             oauth2 = build('oauth2', 'v2', credentials=creds)
@@ -151,6 +144,26 @@ class GooglePhotosClient:
         for album in self.list_albums():
             if album.get('title', '').lower() == title.lower():
                 return album
+        return None
+
+    def get_album_by_path(self, path: str) -> Optional[Dict]:
+        normalized = (path or "").strip().strip('/')
+        if not normalized:
+            return None
+        for album in self.list_albums():
+            product_url = album.get('productUrl', '')
+            if product_url:
+                parsed = urllib.parse.urlparse(product_url)
+                product_path = parsed.path.strip('/')
+                if product_path and product_path.lower() == normalized.lower():
+                    return album
+            share_info = album.get('shareInfo') or {}
+            share_url = share_info.get('shareableUrl') or ''
+            if share_url:
+                parsed_share = urllib.parse.urlparse(share_url)
+                share_path = parsed_share.path.strip('/')
+                if share_path and share_path.lower() == normalized.lower():
+                    return album
         return None
 
     def iter_media_items_in_album(self, album_id: str, page_size: int = 100):
