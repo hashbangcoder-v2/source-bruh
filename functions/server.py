@@ -54,6 +54,7 @@ def create_app(config_path: str = None) -> FastAPI:
 
     cfg_path = os.environ.get("SOURCE_BRUH_CONFIG") or os.fspath(__import__("pathlib").Path.cwd() / "backend" / "config.yaml")
     db = FirestoreDB(cfg["db"]["service_account_key_path"])
+    photos_client = GooglePhotosClient(cfg["google_photos"], db)
     gemini_client: GeminiClient | None = None
 
     def get_gemini() -> GeminiClient | None:
@@ -174,16 +175,8 @@ def create_app(config_path: str = None) -> FastAPI:
 
     @app.post("/auth/login")
     def login():
-        # Trigger OAuth flow to ensure credentials and update token store
-        photos_cfg = cfg.get("google_photos", {})
-        client = PhotosClient(
-            client_secret_path=photos_cfg.get("client_secret_path"),
-            scopes=photos_cfg.get("scopes", []),
-            redirect_port=photos_cfg.get("redirect_port", 1008),
-            token_store=photos_cfg.get("token_store"),
-            oauth_client=photos_cfg.get("oauth_client"),
-        )
-        return {"ok": True, "user": client.user_email}
+        auth_url = photos_client.get_auth_url()
+        return {"ok": True, "auth_url": auth_url}
 
     return app
 
