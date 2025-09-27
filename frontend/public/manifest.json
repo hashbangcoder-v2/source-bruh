@@ -16,8 +16,19 @@
   ],
   "permissions": ["offscreen", "contextMenus", "storage", "notifications"],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' https://apis.google.com 'wasm-unsafe-eval'; object-src 'self'"
-  }
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval' https://apis.google.com https://www.gstatic.com; object-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "offscreen.html",
+        "offscreen.js",
+        "chunks/*.js",
+        "assets/*"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
 
 

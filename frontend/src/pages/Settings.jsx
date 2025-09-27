@@ -48,7 +48,7 @@ async function createOffscreenDocument() {
  * Settings page displayed within the popup. It handles user authentication,
  * Google Photos source configuration and Gemini API key management.
  */
-function Settings() {
+function Settings({ onBackToHome = null }) {
   const [user, setUser] = useState(null);
   const [albumUrl, setAlbumUrl] = useState("");
   const [albumUrlDraft, setAlbumUrlDraft] = useState("");
@@ -109,6 +109,9 @@ function Settings() {
       if (message.type === 'firebase-login-success') {
         setStatusMessage('Signed in successfully.');
         setErrorMessage("");
+        if (onBackToHome) {
+          onBackToHome();
+        }
       } else if (message.type === 'firebase-login-failure') {
         setErrorMessage(`Login failed: ${message.payload}`);
       }

@@ -1,5 +1,5 @@
 import { Search, Settings as Gear, ArrowLeft } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Landing from "./pages/Landing";
 import Query from "./pages/Query";
 import Results from "./pages/Results";
@@ -21,8 +21,8 @@ export default function ExtensionPopup() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [view, setView] = useState("landing");
-  const [previousView, setPreviousView] = useState("landing");
+  const [viewStack, setViewStack] = useState(["landing"]);
+  const view = useMemo(() => viewStack[viewStack.length - 1] || "landing", [viewStack]);
   const serverBase = extCfg.serverBaseUrl;
 
   useEffect(() => {
@@ -55,12 +55,20 @@ export default function ExtensionPopup() {
     setError("");
     setLoading(true);
     try {
-      setView("query");
+      setViewStack((stack) => {
+        const next = [...stack];
+        next[next.length - 1] = "query";
+        return next;
+      });
       const results = await makeAuthenticatedRequest(`/search?q=${query}`);
       setSearchResults(results);
     } catch (error) {
       setError("Failed to search. Is the local server running?");
-      setView("query"); // Go back to query view on error
+      setViewStack((stack) => {
+        const next = [...stack];
+        next[next.length - 1] = "query";
+        return next;
+      }); // Go back to query view on error
     } finally {
       setLoading(false);
     }
@@ -70,20 +78,24 @@ export default function ExtensionPopup() {
     try {
       // No need to check local storage for token, auth state is the source of truth
       if (!user) {
-        setView("landing");
+        setViewStack(["landing"]);
         return;
       }
 
       const settings = await makeAuthenticatedRequest("/settings");
 
       if (settings && settings.album_url && settings.gemini_key_set) {
-        setView("query");
+        setViewStack((stack) => {
+          const nextStack = [...stack];
+          nextStack[nextStack.length - 1] = "query";
+          return nextStack;
+        });
       } else {
-        setView("landing");
+        setViewStack(["landing"]);
       }
     } catch (error) {
       console.error("Failed to check readiness:", error);
-      setView("landing"); // Fallback to landing on error
+      setViewStack(["landing"]); // Fallback to landing on error
     }
   };
 
@@ -92,20 +104,18 @@ export default function ExtensionPopup() {
   }
 
   const openSettings = useCallback(() => {
-    setPreviousView(view || "landing");
-    setView("settings");
-  }, [view]);
+    setViewStack((stack) => [...stack, "settings"]);
+  }, []);
 
   const handleBack = useCallback(() => {
-    if (view === "settings") {
-      const destination = previousView && previousView !== "settings" ? previousView : "landing";
-      setView(destination);
-      setPreviousView("landing");
-      return;
-    }
-    setView("landing");
-    setPreviousView("landing");
-  }, [previousView, view]);
+    setViewStack((stack) => {
+      if (stack.length <= 1) {
+        return ["landing"];
+      }
+      const next = stack.slice(0, -1);
+      return next.length ? next : ["landing"];
+    });
+  }, []);
 
   return (
     <div className="w-80 p-4 bg-white shadow-lg rounded-lg space-y-4">
@@ -133,7 +143,7 @@ export default function ExtensionPopup() {
           <Results results={searchResults} />
         </>
       )}
-      {view === "settings" && <Settings />}
+      {view === "settings" && <Settings onBackToHome={() => setViewStack(["landing"])} />}
     </div>
   );
 }
