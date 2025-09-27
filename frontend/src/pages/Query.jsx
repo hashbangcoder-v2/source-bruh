@@ -1,5 +1,9 @@
 import { Search } from "lucide-react";
 
+/**
+ * Query page captures the textual description the user wants to search for
+ * and dispatches the lookup against the backend.
+ */
 export default function Query({ query, setQuery, onSearch, loading }) {
   const trimmedQuery = query?.trim() ?? "";
 

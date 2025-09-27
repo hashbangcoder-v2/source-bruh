@@ -1,5 +1,5 @@
 import { Search, Settings as Gear, ArrowLeft } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Landing from "./pages/Landing";
 import Query from "./pages/Query";
 import Results from "./pages/Results";
@@ -9,6 +9,12 @@ import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
 import { makeAuthenticatedRequest } from "./api";
 
+/**
+ * Root component for the Chrome extension popup. It orchestrates the
+ * navigation between the landing (home), query, results and settings
+ * experiences while also wiring up Firebase authentication state to the
+ * backend.
+ */
 export default function ExtensionPopup() {
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
@@ -16,6 +22,7 @@ export default function ExtensionPopup() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [view, setView] = useState("landing");
+  const [previousView, setPreviousView] = useState("landing");
   const serverBase = extCfg.serverBaseUrl;
 
   useEffect(() => {
@@ -84,19 +91,35 @@ export default function ExtensionPopup() {
     checkReadinessAndRoute();
   }
 
+  const openSettings = useCallback(() => {
+    setPreviousView(view || "landing");
+    setView("settings");
+  }, [view]);
+
+  const handleBack = useCallback(() => {
+    if (view === "settings") {
+      const destination = previousView && previousView !== "settings" ? previousView : "landing";
+      setView(destination);
+      setPreviousView("landing");
+      return;
+    }
+    setView("landing");
+    setPreviousView("landing");
+  }, [previousView, view]);
+
   return (
     <div className="w-80 p-4 bg-white shadow-lg rounded-lg space-y-4">
       <div className="flex items-center justify-between">
         <div>
           {view !== "landing" && (
-            <button className="p-1 hover:bg-gray-100 rounded" onClick={() => checkReadinessAndRoute("back")} aria-label="Back">
+            <button className="p-1 hover:bg-gray-100 rounded" onClick={handleBack} aria-label="Back">
               <ArrowLeft className="h-4 w-4" />
             </button>
           )}
         </div>
         <div>
           {view !== "settings" && (
-            <button className="p-1 hover:bg-gray-100 rounded" onClick={() => setView("settings")} aria-label="Settings">
+            <button className="p-1 hover:bg-gray-100 rounded" onClick={openSettings} aria-label="Settings">
               <Gear className="h-4 w-4" />
             </button>
           )}

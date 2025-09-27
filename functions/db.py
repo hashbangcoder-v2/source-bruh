@@ -1,5 +1,8 @@
+import base64
 import datetime
-from typing import Any, Dict, List, Optional
+import math
+import os
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -12,9 +15,16 @@ class FirestoreDB:
             cred = credentials.Certificate(service_account_key_path)
             firebase_admin.initialize_app(cred)
         self.db = firestore.client()
+        self._use_firestore = True
+        self._local_users: Dict[str, Dict[str, Any]] = {}
+        self._local_images: Dict[str, Dict[str, Any]] = {}
+        self._IMAGES_COLLECTION = "images"
 
     def _images_collection(self, user_id: str):
         return self.db.collection('users').document(user_id).collection('images')
+
+    def _secrets_collection(self, user_id: str):
+        return self.db.collection('users').document(user_id).collection('secrets')
 
     def add_image_data(self, user_id: str, image_data: Dict[str, Any]):
         media_id = image_data.get('google_media_id')
@@ -129,6 +139,34 @@ class FirestoreDB:
         else:
             user_doc = self._local_users.setdefault(uid, {})
             user_doc["settings"] = settings
+
+    def save_secret(self, uid: str, name: str, value: str):
+        """Persists a sensitive secret value under a dedicated sub-collection."""
+
+        if self._use_firestore:
+            doc_ref = self._secrets_collection(uid).document(name)
+            doc_ref.set({"value": value, "updated_at": firestore.SERVER_TIMESTAMP}, merge=True)
+        else:
+            user_doc = self._local_users.setdefault(uid, {})
+            secrets = user_doc.setdefault("secrets", {})
+            secrets[name] = {"value": value}
+
+    def get_secret(self, uid: str, name: str) -> Optional[str]:
+        """Retrieves a previously stored secret value."""
+
+        if self._use_firestore:
+            doc_ref = self._secrets_collection(uid).document(name)
+            doc = doc_ref.get()
+            if not doc.exists:
+                return None
+            data = doc.to_dict() or {}
+            return data.get("value")
+
+        secrets = self._local_users.get(uid, {}).get("secrets", {})
+        stored = secrets.get(name)
+        if isinstance(stored, dict):
+            return stored.get("value")
+        return stored
 
     def save_google_photos_credentials(self, uid: str, creds: Credentials):
         """Saves Google Photos credentials for a user."""
