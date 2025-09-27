@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Dict, Iterable, List, Optional
 import os
 import requests
@@ -11,6 +12,11 @@ from google_auth_oauthlib.flow import Flow, InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 import json
+
+try:
+    from omegaconf import DictConfig  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    DictConfig = Mapping  # type: ignore
 
 try:  # pragma: no cover
     from .db import FirestoreDB

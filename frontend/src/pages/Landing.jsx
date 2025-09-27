@@ -1,5 +1,9 @@
 import React from "react";
 
+/**
+ * Landing (home) view that introduces the extension and routes to the query
+ * experience once the user presses the “Get Started” button.
+ */
 // Correctly reference the icon from the public directory
 const iconUrl = "/icons/icon.png";
 

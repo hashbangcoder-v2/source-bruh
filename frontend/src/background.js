@@ -1,6 +1,10 @@
 import extCfg from "./extension-config.json";
 
-const MENU_ID = "source-bruh-add-image";
+/**
+ * Identifier for the extension context-menu entry that lets users index
+ * images directly from any web page via "Source-Me-Bruh".
+ */
+const MENU_ID = "source-me-bruh";
 
 const getFromStorage = (keys) =>
   new Promise((resolve) => {
@@ -22,6 +26,10 @@ const setInStorage = (items) =>
     storage.set(items, () => resolve());
   });
 
+/**
+ * Sends a notification (or console log fallback) to inform the user about
+ * ingestion success/failure.
+ */
 const showNotification = (message, isError = false) => {
   if (!chrome.notifications?.create) {
     const logger = isError ? console.error : console.log;
@@ -39,7 +47,7 @@ const showNotification = (message, isError = false) => {
 chrome.runtime.onInstalled.addListener(async () => {
   chrome.contextMenus.create({
     id: MENU_ID,
-    title: "Add image to Source Bruh",
+    title: "Source-Me-Bruh",
     contexts: ["image"],
   });
   await setInStorage({ serverBaseUrl: extCfg.serverBaseUrl });

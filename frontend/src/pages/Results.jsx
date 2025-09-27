@@ -1,5 +1,9 @@
 import extCfg from "../extension-config.json";
 
+/**
+ * Results page renders thumbnails for the most relevant images returned by
+ * the search endpoint.
+ */
 export default function Results({ results }) {
   const base = extCfg.serverBaseUrl;
   if (!results?.length) {
