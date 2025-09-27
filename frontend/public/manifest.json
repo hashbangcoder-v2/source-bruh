@@ -7,10 +7,14 @@
     "default_popup": "popup.html",
     "default_icon": "icons/icon.png"
   },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "host_permissions": [
     "https://us-central1-source-bruh.cloudfunctions.net/*"
   ],
-  "permissions": ["offscreen"],
+  "permissions": ["offscreen", "contextMenus", "storage", "notifications"],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
   }
