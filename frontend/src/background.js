@@ -6,6 +6,31 @@ import extCfg from "./extension-config.json";
  */
 const MENU_ID = "source-me-bruh";
 
+/**
+ * Ensures the context menu entry exists. Chrome MV3 service workers can be
+ * torn down at any time, so we defensively recreate the menu both when the
+ * extension is installed/updated and when the worker wakes up again.
+ */
+function ensureContextMenu() {
+  if (!chrome.contextMenus?.create) {
+    return;
+  }
+
+  chrome.contextMenus.remove(MENU_ID, () => {
+    // Ignore "Cannot find menu item" errors when the menu does not exist yet.
+    // Accessing lastError consumes the error so it does not surface in logs.
+    if (chrome.runtime.lastError) {
+      // no-op
+    }
+
+    chrome.contextMenus.create({
+      id: MENU_ID,
+      title: "Source-Me-Bruh",
+      contexts: ["image"],
+    });
+  });
+}
+
 const getFromStorage = (keys) =>
   new Promise((resolve) => {
     const storage = chrome.storage?.local;
@@ -45,13 +70,18 @@ const showNotification = (message, isError = false) => {
 };
 
 chrome.runtime.onInstalled.addListener(async () => {
-  chrome.contextMenus.create({
-    id: MENU_ID,
-    title: "Source-Me-Bruh",
-    contexts: ["image"],
-  });
+  ensureContextMenu();
   await setInStorage({ serverBaseUrl: extCfg.serverBaseUrl });
 });
+
+chrome.runtime.onStartup?.addListener(() => {
+  ensureContextMenu();
+});
+
+// MV3 service workers run on-demand. Recreate the menu when this script is
+// evaluated so manual reloads also get a context entry without needing to wait
+// for an additional event.
+ensureContextMenu();
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== MENU_ID || !info.srcUrl) {
