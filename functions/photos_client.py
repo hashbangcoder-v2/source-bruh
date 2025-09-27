@@ -1,4 +1,5 @@
-from typing import Any, Dict, Iterable, List, Optional
+
+from typing import Any, Dict, List, Optional, Mapping
 import os
 import requests
 import secrets
@@ -17,92 +18,20 @@ except ImportError:  # pragma: no cover
 
 
 class GooglePhotosClient:
-    def __init__(
-        self,
-        *,
-        client_secret_path: Optional[str],
-        scopes: Iterable[str],
-        redirect_port: int,
-        token_store: Optional[str] = None,
-        oauth_client: Optional[Dict[str, Any]] = None,
-        db: Optional[FirestoreDB] = None,
-        user_id: Optional[str] = None,
-        service: Any = None,
-        credentials: Optional[Credentials] = None,
-    ) -> None:
-        self.client_secret_path = client_secret_path
-        self.scopes = list(scopes or [])
-        if not self.scopes and service is None and credentials is None:
-            raise ValueError("At least one Google Photos scope is required")
-        self.redirect_port = redirect_port
-        self.token_store = token_store
-        self.oauth_client = oauth_client or {}
+    def __init__(self, cfg: DictConfig | Mapping[str, Any], db: FirestoreDB):
+        self.cfg = cfg
         self.db = db
-        self.user_id = user_id
-        self._service = service
-        self._credentials = credentials
-        self.user_email: Optional[str] = None
-        self.code_verifier: Optional[str] = None
+        self.oauth_client = self._cfg_value("oauth_client", {})
+        self.redirect_port = self._cfg_value("redirect_port")
+        scopes = self._cfg_value("scopes", [])
+        self.scopes = list(scopes) if scopes is not None else []
+        self.token_store = self._cfg_value("token_store")  # Keep for local dev maybe, but not for cloud
+        self.client_secret_path = self._cfg_value("client_secret_path")
 
-    @property
-    def service(self):
-        if self._service is None:
-            self._service = self._build_service()
-        return self._service
-
-    def _load_credentials_from_db(self) -> Optional[Credentials]:
-        if not self.db or not self.user_id:
-            return None
-        try:
-            creds = self.db.get_google_photos_credentials(self.user_id)
-        except Exception:
-            return None
-        return creds
-
-    def _load_credentials_from_token_store(self) -> Optional[Credentials]:
-        if not self.token_store or not os.path.exists(self.token_store):
-            return None
-        try:
-            with open(self.token_store, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            return Credentials.from_authorized_user_info(data, scopes=self.scopes or None)
-        except Exception:
-            return None
-
-    def _persist_credentials(self, creds: Credentials) -> None:
-        if self.token_store:
-            try:
-                with open(self.token_store, "w", encoding="utf-8") as fh:
-                    fh.write(creds.to_json())
-            except Exception:
-                pass
-        if self.db and self.user_id:
-            try:
-                self.db.save_google_photos_credentials(self.user_id, creds)
-            except Exception:
-                pass
-
-    def _build_flow(self) -> InstalledAppFlow:
-        if self.client_secret_path and os.path.exists(self.client_secret_path):
-            return InstalledAppFlow.from_client_secrets_file(self.client_secret_path, self.scopes)
-        if self.oauth_client:
-            redirect_uri = f"http://localhost:{self.redirect_port}/"
-            return InstalledAppFlow.from_client_config(self.oauth_client, self.scopes, redirect_uri=redirect_uri)
-        raise FileNotFoundError(
-            "Missing Google OAuth client credentials; set google_photos.client_secret_path or google_photos.oauth_client in config.yaml",
-        )
-
-    def _ensure_credentials(self, creds: Optional[Credentials]) -> Credentials:
-        if creds and getattr(creds, "expired", False) and getattr(creds, "refresh_token", None):
-            try:
-                creds.refresh(Request())
-            except Exception:
-                creds = None
-        if creds and getattr(creds, "valid", False):
-            return creds
-        flow = self._build_flow()
-        creds = flow.run_local_server(port=self.redirect_port)
-        return creds
+    def _cfg_value(self, key: str, default: Any | None = None) -> Any:
+        if isinstance(self.cfg, Mapping):
+            return self.cfg.get(key, default)
+        return getattr(self.cfg, key, default)
 
     def _generate_pkce_pair(self) -> tuple[str, str]:
         """Generate PKCE code verifier and challenge"""
