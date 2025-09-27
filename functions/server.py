@@ -4,6 +4,7 @@ import io
 import json
 import os
 import urllib.parse
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Response, Depends
@@ -16,9 +17,8 @@ import requests
 from config_loader import load_config
 from db import FirestoreDB
 from llm import GeminiClient
-from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
 from ingest import create_thumbnail, ensure_dirs
+from photos_client import GooglePhotosClient
 from PIL import Image
 
 
@@ -149,16 +149,33 @@ def create_app(config_path: str = None) -> FastAPI:
     async def get_settings(user: dict = Depends(get_current_user)):
         """Endpoint to get user settings."""
         uid = user["uid"]
-        user_settings = db.get_user_settings(uid)
-        if not user_settings:
-            raise HTTPException(status_code=404, detail="Settings not found for user")
+        user_settings = db.get_user_settings(uid) or {}
+        album_url = user_settings.get("album_url", "")
 
-        user_info = db.get_user_info(uid)
+        if hasattr(db, "get_secret"):
+            stored_secret = db.get_secret(uid, "gemini_api_key")
+        else:
+            stored_secret = user_settings.get("gemini_api_key")
+        gemini_key_set = bool(stored_secret)
+        if user_settings.get("gemini_key_set") != gemini_key_set:
+            user_settings["gemini_key_set"] = gemini_key_set
+            if hasattr(db, "save_user_settings"):
+                db.save_user_settings(uid, user_settings)
+
+        if hasattr(db, "get_user_info"):
+            stored_user = db.get_user_info(uid) or {}
+        elif hasattr(photos_client, "get_user_info_from_db"):
+            stored_user = photos_client.get_user_info_from_db(uid) or {}
+        else:
+            stored_user = {}
+        email = user.get("email") or stored_user.get("email", "")
+        if email and stored_user.get("email") != email and hasattr(db, "save_user_info"):
+            db.save_user_info(uid, {"email": email})
 
         return SettingsResponse(
-            email=user_info.get("email", ""),
-            album_url=user_settings.get("album_url", ""),
-            gemini_key_set=bool(user_settings.get("gemini_api_key")),
+            email=email,
+            album_url=album_url,
+            gemini_key_set=gemini_key_set,
         )
 
 
@@ -196,9 +213,14 @@ def create_app(config_path: str = None) -> FastAPI:
         cfg.setdefault("google_photos", {})["album_url"] = normalized
         cfg["google_photos"]["album_paths"] = [normalized] if normalized else []
 
-        existing = db.get_user_settings(user_id)
+        existing = db.get_user_settings(user_id) or {}
         existing["album_url"] = normalized
-        db.save_user_settings(user_id, existing)
+        if hasattr(db, "save_user_settings"):
+            db.save_user_settings(user_id, existing)
+
+        email = user.get("email")
+        if email and hasattr(db, "save_user_info"):
+            db.save_user_info(user_id, {"email": email})
 
         return {"ok": True, "album_url": normalized}
 
@@ -206,9 +228,31 @@ def create_app(config_path: str = None) -> FastAPI:
         api_key: str
 
     @app.post("/settings/gemini-key")
-    def update_gemini_key(body: UpdateGeminiKeyBody):
+    def update_gemini_key(body: UpdateGeminiKeyBody, user: dict = Depends(get_current_user)):
+        api_key = (body.api_key or "").strip()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="API key is required")
+
         key_env = cfg["llm"]["api_key_env"]
-        os.environ[key_env] = body.api_key
+        os.environ[key_env] = api_key
+
+        nonlocal gemini_client
+        gemini_client = None
+
+        user_id = user["uid"]
+        existing = db.get_user_settings(user_id) or {}
+        if hasattr(db, "save_secret"):
+            db.save_secret(user_id, "gemini_api_key", api_key)
+        else:
+            existing["gemini_api_key"] = api_key
+        existing["gemini_key_set"] = True
+        if hasattr(db, "save_user_settings"):
+            db.save_user_settings(user_id, existing)
+
+        email = user.get("email")
+        if email and hasattr(db, "save_user_info"):
+            db.save_user_info(user_id, {"email": email})
+
         return {"ok": True}
 
     @app.post("/images/from-url")
@@ -216,6 +260,10 @@ def create_app(config_path: str = None) -> FastAPI:
         token_user_id = user["uid"]
         if not body.image_url:
             raise HTTPException(status_code=400, detail="Missing image URL")
+
+        email = user.get("email")
+        if email and hasattr(db, "save_user_info"):
+            db.save_user_info(token_user_id, {"email": email})
 
         try:
             resp = requests.get(body.image_url, timeout=30)
