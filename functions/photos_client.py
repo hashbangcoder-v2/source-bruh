@@ -1,16 +1,17 @@
-
-from typing import Any, Dict, List, Optional, Mapping
+from typing import Any, Dict, Iterable, List, Optional
 import os
 import requests
 import secrets
 import hashlib
 import base64
 import urllib.parse
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from googleapiclient.discovery import build
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow, InstalledAppFlow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 import json
+
 try:  # pragma: no cover
     from .db import FirestoreDB
 except ImportError:  # pragma: no cover
@@ -42,9 +43,13 @@ class GooglePhotosClient:
         return code_verifier, code_challenge
 
     def get_auth_url(self) -> str:
-        client_id = self.oauth_client["web"]["client_id"]
+        client_config = self._client_config_dict()
+        client_info = client_config.get("web") or client_config.get("installed")
+        if not client_info:
+            raise RuntimeError("OAuth client configuration must include a 'web' or 'installed' section.")
+        client_id = client_info["client_id"]
         redirect_uri = f"http://localhost:{self.redirect_port}/"
-        
+
         # Generate PKCE pair
         code_verifier, code_challenge = self._generate_pkce_pair()
         self.code_verifier = code_verifier
@@ -70,13 +75,13 @@ class GooglePhotosClient:
     def get_credentials_from_db(self, uid: str) -> Optional[Credentials]:
         """Gets user's Google Photos API credentials from Firestore."""
         if not self.db:
-            return None
+            raise RuntimeError("Firestore database client is not configured.")
         return self.db.get_google_photos_credentials(uid)
 
     def get_user_info_from_db(self, uid: str) -> dict:
         """Gets user's info from Firestore."""
         if not self.db:
-            return {}
+            raise RuntimeError("Firestore database client is not configured.")
         return self.db.get_user_info(uid)
 
     def get_credentials_from_code(self, code: str, uid: str) -> Credentials:
@@ -93,7 +98,7 @@ class GooglePhotosClient:
         
         # Use a flow object to complete the auth process
         flow = InstalledAppFlow.from_client_config(
-            self.oauth_client, self.scopes, redirect_uri=redirect_uri
+            self._client_config_dict(), self.scopes, redirect_uri=redirect_uri
         )
 
         # Exchange code for credentials
@@ -116,6 +121,7 @@ class GooglePhotosClient:
         return creds
 
     def _build_service(self):
+
         creds = self._credentials or self._load_credentials_from_db() or self._load_credentials_from_token_store()
         creds = self._ensure_credentials(creds)
         self._credentials = creds
@@ -127,13 +133,69 @@ class GooglePhotosClient:
             self.user_email = info.get('email')
         except Exception:
             self.user_email = None
+        self.service = svc
         return svc
+
+    def _authenticate_with_pkce(self) -> Credentials:
+        client_config = self._client_config_dict()
+        redirect_uri = f"http://localhost:{self.redirect_port}/"
+        flow = Flow.from_client_config(client_config, scopes=self.scopes, redirect_uri=redirect_uri)
+
+        code_verifier, code_challenge = self._generate_pkce_pair()
+        self.code_verifier = code_verifier
+
+        auth_url, _ = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent",
+            code_challenge=code_challenge,
+            code_challenge_method="S256",
+        )
+
+        auth_result: Dict[str, Optional[str]] = {"code": None, "error": None}
+
+        class OAuthCallbackHandler(BaseHTTPRequestHandler):
+            def do_GET(self_inner):  # type: ignore[override]
+                parsed = urllib.parse.urlparse(self_inner.path)
+                params = urllib.parse.parse_qs(parsed.query)
+                if "code" in params:
+                    auth_result["code"] = params["code"][0]
+                    message = "Authentication complete. You may close this window."
+                    status = 200
+                else:
+                    auth_result["error"] = params.get("error", ["Unknown error"])[0]
+                    message = "Authentication failed. You may close this window."
+                    status = 400
+                self_inner.send_response(status)
+                self_inner.send_header("Content-Type", "text/html; charset=utf-8")
+                self_inner.end_headers()
+                self_inner.wfile.write(message.encode("utf-8"))
+
+            def log_message(self_inner, format: str, *args: Any) -> None:  # type: ignore[override]
+                return
+
+        server = HTTPServer(("localhost", self.redirect_port), OAuthCallbackHandler)
+        try:
+            print("Please visit this URL to authorize the application:")
+            print(auth_url)
+            print("\nWaiting for authorization code...")
+            server.handle_request()
+        finally:
+            server.server_close()
+
+        if not auth_result["code"]:
+            error = auth_result["error"] or "Authorization code not received."
+            raise RuntimeError(f"Failed to obtain authorization code: {error}")
+
+        flow.fetch_token(code=auth_result["code"], code_verifier=code_verifier)
+        return flow.credentials
 
     def list_albums(self, page_size: int = 50) -> List[Dict]:
         albums: List[Dict] = []
         next_token: Optional[str] = None
+        service = self._ensure_service()
         while True:
-            result = self.service.albums().list(pageSize=page_size, pageToken=next_token).execute()
+            result = service.albums().list(pageSize=page_size, pageToken=next_token).execute()
             albums.extend(result.get('albums', []))
             next_token = result.get('nextPageToken')
             if not next_token:
@@ -168,11 +230,12 @@ class GooglePhotosClient:
 
     def iter_media_items_in_album(self, album_id: str, page_size: int = 100):
         next_page_token: Optional[str] = None
+        service = self._ensure_service()
         while True:
             body = {"albumId": album_id, "pageSize": page_size}
             if next_page_token:
                 body["pageToken"] = next_page_token
-            result = self.service.mediaItems().search(body=body).execute()
+            result = service.mediaItems().search(body=body).execute()
             items = result.get('mediaItems', [])
             for item in items:
                 yield item
