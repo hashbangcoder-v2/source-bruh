@@ -1,4 +1,4 @@
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional, Mapping
 import os
 import requests
 import secrets
@@ -14,13 +14,20 @@ from omegaconf import DictConfig
 
 
 class GooglePhotosClient:
-    def __init__(self, cfg: DictConfig, db: FirestoreDB):
+    def __init__(self, cfg: DictConfig | Mapping[str, Any], db: FirestoreDB):
         self.cfg = cfg
         self.db = db
-        self.oauth_client = cfg.oauth_client
-        self.redirect_port = cfg.redirect_port
-        self.scopes = list(cfg.scopes)
-        self.token_store = cfg.token_store  # Keep for local dev maybe, but not for cloud
+        self.oauth_client = self._cfg_value("oauth_client", {})
+        self.redirect_port = self._cfg_value("redirect_port")
+        scopes = self._cfg_value("scopes", [])
+        self.scopes = list(scopes) if scopes is not None else []
+        self.token_store = self._cfg_value("token_store")  # Keep for local dev maybe, but not for cloud
+        self.client_secret_path = self._cfg_value("client_secret_path")
+
+    def _cfg_value(self, key: str, default: Any | None = None) -> Any:
+        if isinstance(self.cfg, Mapping):
+            return self.cfg.get(key, default)
+        return getattr(self.cfg, key, default)
 
     def _generate_pkce_pair(self) -> tuple[str, str]:
         """Generate PKCE code verifier and challenge"""
