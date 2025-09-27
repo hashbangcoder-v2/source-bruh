@@ -1,19 +1,25 @@
-from typing import Any, Dict, List, Optional
+import datetime
+import hashlib
+import io
 import json
 import os
+import urllib.parse
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from firebase_admin import auth
 from pydantic import BaseModel
+import requests
 
 from config_loader import load_config
 from db import FirestoreDB
 from llm import GeminiClient
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
-from photos_client import GooglePhotosClient
+from ingest import create_thumbnail, ensure_dirs
+from PIL import Image
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -27,7 +33,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 
 class SearchResponseItem(BaseModel):
-    image_rowid: int
+    image_rowid: str
     distance: float
     description: Optional[str]
     album_title: Optional[str]
@@ -40,8 +46,32 @@ class SettingsResponse(BaseModel):
     gemini_key_set: bool
 
 
+class AddImageBody(BaseModel):
+    image_url: str
+    page_url: Optional[str] = None
+    album_path: Optional[str] = None
+    album_title: Optional[str] = None
+
+
+def _normalize_album_path(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    raw = value.strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except ValueError:
+        return raw.strip("/")
+    if parsed.scheme and parsed.netloc:
+        path = parsed.path.strip("/")
+        return path
+    return raw.strip("/")
+
+
 def create_app(config_path: str = None) -> FastAPI:
-    cfg = load_config(config_path)
+    config_file = Path(config_path) if config_path else Path(__file__).with_name("config.yaml")
+    cfg = load_config(os.fspath(config_file))
     app = FastAPI()
 
     app.add_middleware(
@@ -52,10 +82,14 @@ def create_app(config_path: str = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    cfg_path = os.environ.get("SOURCE_BRUH_CONFIG") or os.fspath(__import__("pathlib").Path.cwd() / "backend" / "config.yaml")
+    cfg_path = os.environ.get("SOURCE_BRUH_CONFIG") or os.fspath(config_file)
     db = FirestoreDB(cfg["db"]["service_account_key_path"])
+    photos_client = GooglePhotosClient(cfg["google_photos"], db)
     gemini_client: GeminiClient | None = None
-
+    storage_cfg = cfg.get("storage", {})
+    images_dir = storage_cfg.get("images_dir", "data/images")
+    thumbs_dir = storage_cfg.get("thumbs_dir", "data/thumbs")
+    
     def get_gemini() -> GeminiClient | None:
         nonlocal gemini_client
         if gemini_client is not None:
@@ -82,31 +116,34 @@ def create_app(config_path: str = None) -> FastAPI:
         if client is None:
             raise HTTPException(status_code=400, detail="Gemini API key not set. Update it in Settings.")
         emb = client.embed_text(q)
-        rows = db.search(emb, top_k=top_k)
-        base_thumb = "/image/{}?thumb=1"
+        rows = db.search(emb, top_k=top_k, user_id=user.get("uid"))
         results: List[SearchResponseItem] = []
         for r in rows:
+            image_id = str(r.get("image_rowid"))
+            thumb_url = r.get("thumb_url") or ""
+            if not thumb_url:
+                if r.get("thumb_path") or r.get("thumb_bytes"):
+                    thumb_url = app.url_path_for("get_image", image_rowid=image_id) + "?thumb=1"
+                elif r.get("image_url"):
+                    thumb_url = str(r["image_url"])
             results.append(
                 SearchResponseItem(
-                    image_rowid=int(r["image_rowid"]),
+                    image_rowid=image_id,
                     distance=float(r["distance"]),
-                    description=r["description"],
-                    album_title=r["album_title"],
-                    timestamp=r["timestamp"],
-                    thumb_url=base_thumb.format(int(r["image_rowid"]))
+                    description=r.get("description"),
+                    album_title=r.get("album_title"),
+                    timestamp=r.get("timestamp"),
+                    thumb_url=thumb_url,
                 )
             )
         return results
 
     @app.get("/image/{image_rowid}")
-    def get_image(image_rowid: int, thumb: int = 0):
-        file_path, thumb_path = db.get_image_paths(image_rowid)
-        target = thumb_path if thumb == 1 and thumb_path else file_path
-        if not target or not os.path.exists(target):
+    def get_image(image_rowid: str, thumb: int = 0):
+        blob, mime_type = db.get_image_blob(image_rowid, prefer_thumb=thumb == 1)
+        if blob is None:
             raise HTTPException(status_code=404, detail="Image not found")
-        with open(target, "rb") as f:
-            data = f.read()
-        return Response(content=data, media_type="image/jpeg")
+        return Response(content=blob, media_type=mime_type or "image/jpeg")
 
     @app.get("/settings", response_model=SettingsResponse)
     async def get_settings(user: dict = Depends(get_current_user)):
@@ -116,7 +153,7 @@ def create_app(config_path: str = None) -> FastAPI:
         if not user_settings:
             raise HTTPException(status_code=404, detail="Settings not found for user")
 
-        user_info = photos_client.get_user_info_from_db(uid)
+        user_info = db.get_user_info(uid)
 
         return SettingsResponse(
             email=user_info.get("email", ""),
@@ -143,15 +180,27 @@ def create_app(config_path: str = None) -> FastAPI:
         album_url: str
 
     @app.post("/settings/album-url")
-    def update_album_url(body: UpdateAlbumUrlBody):
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            current = json.load(f)
-        current.setdefault("google_photos", {})["album_url"] = body.album_url
+    def update_album_url(body: UpdateAlbumUrlBody, user: dict = Depends(get_current_user)):
+        normalized = _normalize_album_path(body.album_url)
+        user_id = user["uid"]
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                current = json.load(f)
+        except FileNotFoundError:
+            current = {}
+        photos_cfg = current.setdefault("google_photos", {})
+        photos_cfg["album_url"] = normalized
+        photos_cfg["album_paths"] = [normalized] if normalized else []
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(current, f, indent=2)
-        # Update in-memory cfg as well
-        cfg.setdefault("google_photos", {})["album_url"] = body.album_url
-        return {"ok": True}
+        cfg.setdefault("google_photos", {})["album_url"] = normalized
+        cfg["google_photos"]["album_paths"] = [normalized] if normalized else []
+
+        existing = db.get_user_settings(user_id)
+        existing["album_url"] = normalized
+        db.save_user_settings(user_id, existing)
+
+        return {"ok": True, "album_url": normalized}
 
     class UpdateGeminiKeyBody(BaseModel):
         api_key: str
@@ -161,6 +210,76 @@ def create_app(config_path: str = None) -> FastAPI:
         key_env = cfg["llm"]["api_key_env"]
         os.environ[key_env] = body.api_key
         return {"ok": True}
+
+    @app.post("/images/from-url")
+    def add_image_from_url(body: AddImageBody, user: dict = Depends(get_current_user)):
+        token_user_id = user["uid"]
+        if not body.image_url:
+            raise HTTPException(status_code=400, detail="Missing image URL")
+
+        try:
+            resp = requests.get(body.image_url, timeout=30)
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to download image: {exc}") from exc
+
+        image_bytes = resp.content
+        ensure_dirs(images_dir, thumbs_dir)
+        sha = hashlib.sha256(image_bytes).hexdigest()
+        filename = f"context-{sha[:16]}.jpg"
+        file_path = os.path.join(images_dir, filename)
+        thumb_path = os.path.join(thumbs_dir, filename)
+
+        with open(file_path, "wb") as fh:
+            fh.write(image_bytes)
+        thumb_bytes = create_thumbnail(image_bytes)
+        with open(thumb_path, "wb") as fh:
+            fh.write(thumb_bytes)
+
+        width = height = None
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                width, height = img.size
+        except Exception:
+            width = height = None
+
+        client = get_gemini()
+        if client is None:
+            raise HTTPException(status_code=400, detail="Gemini API key not set. Update it in Settings.")
+
+        description = client.describe_image(image_bytes)
+        embedding = client.embed_text(description) if description else []
+
+        timestamp = datetime.datetime.now(datetime.timezone.utc)
+
+        db.upsert_media_item(
+            token_user_id,
+            sha,
+            {
+                "google_media_id": sha,
+                "album_title": body.album_title,
+                "album_path": body.album_path,
+                "file_path": file_path,
+                "thumb_path": thumb_path,
+                "timestamp": timestamp,
+                "timestamp_iso": timestamp.isoformat(),
+                "sha256": sha,
+                "description": description,
+                "embedding": embedding,
+                "mime_type": resp.headers.get("Content-Type"),
+                "filename": filename,
+                "source_base_url": body.image_url,
+                "image_bytes": image_bytes,
+                "thumbnail_bytes": thumb_bytes,
+                "width": width,
+                "height": height,
+                "manual_entry": True,
+                "source_type": "context-menu",
+                "source_page_url": body.page_url,
+            },
+        )
+
+        return {"ok": True, "media_id": sha}
 
     @app.post("/settings/logout")
     def logout():
@@ -174,16 +293,8 @@ def create_app(config_path: str = None) -> FastAPI:
 
     @app.post("/auth/login")
     def login():
-        # Trigger OAuth flow to ensure credentials and update token store
-        photos_cfg = cfg.get("google_photos", {})
-        client = PhotosClient(
-            client_secret_path=photos_cfg.get("client_secret_path"),
-            scopes=photos_cfg.get("scopes", []),
-            redirect_port=photos_cfg.get("redirect_port", 1008),
-            token_store=photos_cfg.get("token_store"),
-            oauth_client=photos_cfg.get("oauth_client"),
-        )
-        return {"ok": True, "user": client.user_email}
+        auth_url = photos_client.get_auth_url()
+        return {"ok": True, "auth_url": auth_url}
 
     return app
 

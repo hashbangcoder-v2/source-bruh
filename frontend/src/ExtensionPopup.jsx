@@ -19,6 +19,10 @@ export default function ExtensionPopup() {
   const serverBase = extCfg.serverBaseUrl;
 
   useEffect(() => {
+    const hasChrome = typeof chrome !== "undefined" && chrome?.storage?.local;
+    if (hasChrome) {
+      chrome.storage.local.set({ serverBaseUrl: serverBase });
+    }
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         const token = await user.getIdToken();
@@ -26,8 +30,14 @@ export default function ExtensionPopup() {
         // For example, in a context or a global state management library.
         // For simplicity here, we can store it in localStorage, though this is not the most secure method for extensions.
         localStorage.setItem('firebaseIdToken', token);
+        if (hasChrome) {
+          chrome.storage.local.set({ firebaseIdToken: token });
+        }
       } else {
         localStorage.removeItem('firebaseIdToken');
+        if (hasChrome) {
+          chrome.storage.local.remove('firebaseIdToken');
+        }
       }
       setUser(user);
     });
@@ -38,12 +48,12 @@ export default function ExtensionPopup() {
     setError("");
     setLoading(true);
     try {
-      setView("Results");
+      setView("query");
       const results = await makeAuthenticatedRequest(`/search?q=${query}`);
       setSearchResults(results);
     } catch (error) {
       setError("Failed to search. Is the local server running?");
-      setView("Query"); // Go back to query view on error
+      setView("query"); // Go back to query view on error
     } finally {
       setLoading(false);
     }
@@ -53,20 +63,20 @@ export default function ExtensionPopup() {
     try {
       // No need to check local storage for token, auth state is the source of truth
       if (!user) {
-        setView("Landing");
+        setView("landing");
         return;
       }
 
       const settings = await makeAuthenticatedRequest("/settings");
 
       if (settings && settings.album_url && settings.gemini_key_set) {
-        setView("Query");
+        setView("query");
       } else {
-        setView("Landing");
+        setView("landing");
       }
     } catch (error) {
       console.error("Failed to check readiness:", error);
-      setView("Landing"); // Fallback to landing on error
+      setView("landing"); // Fallback to landing on error
     }
   };
 
