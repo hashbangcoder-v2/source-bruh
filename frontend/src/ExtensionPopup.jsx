@@ -74,34 +74,31 @@ export default function ExtensionPopup() {
     }
   }
 
-  const checkReadinessAndRoute = async () => {
+  const checkReadinessAndRoute = useCallback(async () => {
+    if (!user) {
+      setViewStack(["settings"]);
+      return;
+    }
+
     try {
-      // No need to check local storage for token, auth state is the source of truth
-      if (!user) {
-        setViewStack(["landing"]);
-        return;
-      }
-
       const settings = await makeAuthenticatedRequest("/settings");
-
-      if (settings && settings.album_url && settings.gemini_key_set) {
-        setViewStack((stack) => {
-          const nextStack = [...stack];
-          nextStack[nextStack.length - 1] = "query";
-          return nextStack;
-        });
+      if (settings?.gemini_key_set) {
+        setError("");
+        setViewStack(["query"]);
       } else {
-        setViewStack(["landing"]);
+        setError("");
+        setViewStack(["settings"]);
       }
     } catch (error) {
       console.error("Failed to check readiness:", error);
-      setViewStack(["landing"]); // Fallback to landing on error
+      setError("");
+      setViewStack(["settings"]);
     }
-  };
+  }, [user]);
 
-  function goFromLanding() {
+  const goFromLanding = useCallback(() => {
     checkReadinessAndRoute();
-  }
+  }, [checkReadinessAndRoute]);
 
   const openSettings = useCallback(() => {
     setViewStack((stack) => [...stack, "settings"]);

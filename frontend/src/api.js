@@ -1,5 +1,27 @@
 // src/api.js
 import extCfg from "./extension-config.json";
+import { auth } from "./firebase";
+
+async function resolveFirebaseToken() {
+  const currentUser = auth.currentUser;
+  if (currentUser) {
+    try {
+      const token = await currentUser.getIdToken();
+      if (token) {
+        return token;
+      }
+    } catch (error) {
+      console.warn("Unable to refresh Firebase ID token", error);
+    }
+  }
+
+  try {
+    return localStorage.getItem("firebaseIdToken");
+  } catch (storageError) {
+    console.warn("Unable to read cached Firebase token", storageError);
+    return null;
+  }
+}
 
 /**
  * Performs an authenticated fetch request against the extension backend.
@@ -18,7 +40,7 @@ import extCfg from "./extension-config.json";
  *   callers can branch on specific response codes (e.g. ``404``).
  */
 export async function makeAuthenticatedRequest(path, options = {}) {
-  const token = localStorage.getItem("firebaseIdToken");
+  const token = await resolveFirebaseToken();
   const url = `${extCfg.serverBaseUrl}${path}`;
 
   const headers = {
