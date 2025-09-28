@@ -1,4 +1,10 @@
 {
-  "serverBaseUrl": "https://us-central1-source-bruh.cloudfunctions.net/api"
+  "serverBaseUrl": "https://us-central1-source-bruh.cloudfunctions.net/api",
+  "googleOAuthClientId": null,
+  "googleOAuthScopes": [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile"
+  ]
 }
 
