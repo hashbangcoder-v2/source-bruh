@@ -3,14 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <!--
-      This meta tag sets a specific Content Security Policy for this document,
-      allowing it to load the necessary scripts from Google's APIs for Firebase Auth.
-      This is the recommended approach for Manifest V3 extensions.
+      The offscreen document runs the Chrome Identity based OAuth handshake
+      entirely within extension code, so no additional CSP allowances are
+      required beyond the defaults inherited from the manifest.
     -->
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="script-src 'self' https://apis.google.com https://www.gstatic.com;"
-    />
+
   </head>
   <body>
     <!-- This script will handle the Firebase auth flow -->

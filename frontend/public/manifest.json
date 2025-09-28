@@ -14,10 +14,10 @@
   "host_permissions": [
     "https://us-central1-source-bruh.cloudfunctions.net/*"
   ],
-  "permissions": ["offscreen", "contextMenus", "storage", "notifications"],
+  "permissions": ["offscreen", "contextMenus", "storage", "notifications", "identity"],
   "content_security_policy": {
-      "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
-      "offscreen": "script-src 'self' https://apis.google.com https://www.gstatic.com; object-src 'self'"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+    "offscreen": "script-src 'self'; object-src 'self'"
   },
   "web_accessible_resources": [
     {

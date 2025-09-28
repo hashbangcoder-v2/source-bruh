@@ -71,6 +71,23 @@ source-bruh/
 2. In Chrome, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked** and select `frontend/dist`.
 3. Click the extension icon to open the popup.
 
+### Configure Google OAuth for Chrome Identity
+
+The extension now relies on `chrome.identity.launchWebAuthFlow` to complete
+Google sign-in without relaxing the manifest Content Security Policy. Before
+attempting to log in:
+
+1. Create (or reuse) an OAuth 2.0 client ID for a Chrome app in the Google Cloud
+   console. The client must list the extension ID’s redirect URL in the form
+   `https://<extension-id>.chromiumapp.org/`.
+2. Add the client ID to Firebase Authentication under **Sign-in method → Google →
+   Web SDK configuration** so Firebase accepts the resulting ID tokens.
+3. Update `frontend/src/extension-config.json` with the client ID and any
+   additional scopes you require. The defaults request basic profile and email
+   access.
+4. Reload the extension so the new configuration is bundled into the offscreen
+   document.
+
 ## Using the Settings page
 
 1. Open the popup and click the gear icon to reach **Settings**.
