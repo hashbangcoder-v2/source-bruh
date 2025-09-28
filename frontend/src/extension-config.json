@@ -1,6 +1,6 @@
 {
   "serverBaseUrl": "https://us-central1-source-bruh.cloudfunctions.net/api",
-  "googleOAuthClientId": null,
+  "googleOAuthClientId": "700625261564-cebfdm3in6hn7rn168gj7up6d59etjn6.apps.googleusercontent.com",
   "googleOAuthScopes": [
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
