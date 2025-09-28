@@ -5,10 +5,12 @@ function requestChromeIdentityTokens() {
   return new Promise((resolve, reject) => {
     try {
       chrome.runtime.sendMessage({ type: "google-oauth-request" }, (response) => {
+
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
+
         if (!response) {
           reject(new Error("No response from background during OAuth."));
           return;
@@ -24,6 +26,7 @@ function requestChromeIdentityTokens() {
     }
   });
 }
+
 
 async function signInWithGoogleViaIdentity() {
   if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
