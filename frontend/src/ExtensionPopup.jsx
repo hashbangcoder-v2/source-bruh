@@ -7,7 +7,7 @@ import Settings from "./pages/Settings";
 import extCfg from "./extension-config.json";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
-import { makeAuthenticatedRequest } from "./api";
+import { makeAuthenticatedRequest, authenticatedSearch } from "./api";
 
 /**
  * Root component for the Chrome extension popup. It orchestrates the
@@ -60,7 +60,7 @@ export default function ExtensionPopup() {
         next[next.length - 1] = "query";
         return next;
       });
-      const results = await makeAuthenticatedRequest(`/search?q=${query}`);
+      const results = await authenticatedSearch(query);
       setSearchResults(results);
     } catch (error) {
       setError("Failed to search. Is the local server running?");

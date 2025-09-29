@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { auth, db } from "../firebase";
 import { signOut, onAuthStateChanged } from "firebase/auth";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
-import { makeAuthenticatedRequest } from "../api";
+import { makeAuthenticatedRequest, getServerBaseUrl, checkBackendHealth } from "../api";
 
 /**
  * Path to the offscreen document that hosts the Firebase auth flow.
@@ -62,6 +62,9 @@ function Settings({ onBackToHome = null }) {
   const [savingAlbum, setSavingAlbum] = useState(false);
   const [savingKey, setSavingKey] = useState(false);
   const [loadingSettings, setLoadingSettings] = useState(true);
+  const [serverBaseUrl, setServerBaseUrl] = useState("");
+  const [checkingServer, setCheckingServer] = useState(false);
+  const [serverStatus, setServerStatus] = useState(null);
 
   const persistUserProfile = useCallback(async (firebaseUser) => {
     if (!firebaseUser) {
@@ -87,6 +90,18 @@ function Settings({ onBackToHome = null }) {
     }, []);
 
   useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const base = await getServerBaseUrl();
+        if (mounted) {
+          setServerBaseUrl(base);
+        }
+      } catch (error) {
+        console.warn("Unable to determine server URL", error);
+      }
+    })();
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (!currentUser) {
@@ -122,7 +137,10 @@ function Settings({ onBackToHome = null }) {
         setLoadingSettings(false);
       }
     });
-    return () => unsubscribe();
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
   }, [persistUserProfile]);
 
   // Set up a listener for messages from the offscreen document
@@ -217,7 +235,11 @@ function Settings({ onBackToHome = null }) {
       setStatusMessage('Sources updated.');
     } catch (error) {
       console.error("Failed to save album path", error);
-      setErrorMessage('Could not save the source album.');
+      if (error?.status === 404 && error?.url) {
+        setErrorMessage(`Could not reach ${error.url}. Check that the deployed functions URL is correct.`);
+      } else {
+        setErrorMessage('Could not save the source album.');
+      }
     } finally {
       setSavingAlbum(false);
     }
@@ -248,7 +270,11 @@ function Settings({ onBackToHome = null }) {
       setStatusMessage('API key stored securely.');
     } catch (error) {
       console.error("Failed to store API key", error);
-      setErrorMessage('Could not store the API key.');
+      if (error?.status === 404 && error?.url) {
+        setErrorMessage(`Could not reach ${error.url}. Check that the deployed functions URL is correct.`);
+      } else {
+        setErrorMessage('Could not store the API key.');
+      }
     } finally {
       setSavingKey(false);
     }
@@ -257,6 +283,20 @@ function Settings({ onBackToHome = null }) {
   const cancelKeyEdit = () => {
     setKeyDraft("");
     setEditKey(false);
+  };
+
+  const handleVerifyServer = async () => {
+    setCheckingServer(true);
+    setServerStatus(null);
+    const result = await checkBackendHealth();
+    setCheckingServer(false);
+    setServerStatus(result);
+    if (result.ok) {
+      setStatusMessage(`Backend reachable at ${result.baseUrl}.`);
+      setErrorMessage("");
+    } else {
+      setErrorMessage(`Backend at ${result.baseUrl} is not reachable. ${result.error?.message || ''}`.trim());
+    }
   };
 
   return (
@@ -349,6 +389,23 @@ function Settings({ onBackToHome = null }) {
             {statusMessage && <p className="text-emerald-600">{statusMessage}</p>}
             {errorMessage && <p className="text-rose-600">{errorMessage}</p>}
           </div>
+        )}
+      </div>
+
+      <div className="space-y-2 border-t border-neutral-200 pt-3 text-xs text-neutral-600">
+        <div className="font-medium text-neutral-700">Backend</div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate" title={serverBaseUrl || 'Unknown backend'}>
+            {serverBaseUrl || 'Backend URL unavailable'}
+          </span>
+          <button className="btn" onClick={handleVerifyServer} disabled={checkingServer}>
+            {checkingServer ? 'Checking…' : 'Verify connection'}
+          </button>
+        </div>
+        {serverStatus && !serverStatus.ok && (
+          <p className="text-rose-600">
+            Unable to contact the backend. Confirm that the Firebase Function URL above is correct and deployed.
+          </p>
         )}
       </div>
     </div>

@@ -2,6 +2,29 @@
 import extCfg from "./extension-config.json";
 import { auth } from "./firebase";
 
+async function readFromChromeStorage(keys) {
+  if (typeof chrome === "undefined" || !chrome?.storage?.local) {
+    return {};
+  }
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(keys, (items) => resolve(items || {}));
+    } catch (error) {
+      console.warn("Unable to read chrome.storage", error);
+      resolve({});
+    }
+  });
+}
+
+async function resolveServerBaseUrl() {
+  const stored = await readFromChromeStorage(["serverBaseUrl"]);
+  const fromStorage = typeof stored.serverBaseUrl === "string" ? stored.serverBaseUrl.trim() : "";
+  if (fromStorage) {
+    return fromStorage.replace(/\/$/, "");
+  }
+  return extCfg.serverBaseUrl.replace(/\/$/, "");
+}
+
 async function resolveFirebaseToken() {
   const currentUser = auth.currentUser;
   if (currentUser) {
@@ -23,6 +46,34 @@ async function resolveFirebaseToken() {
   }
 }
 
+function buildRequestUrl(baseUrl, path) {
+  const trimmedBase = (baseUrl || "").replace(/\/$/, "");
+  if (!path) {
+    return trimmedBase;
+  }
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${trimmedBase}${normalizedPath}`;
+}
+
+export async function getServerBaseUrl() {
+  return resolveServerBaseUrl();
+}
+
+export async function checkBackendHealth() {
+  const baseUrl = await resolveServerBaseUrl();
+  const url = buildRequestUrl(baseUrl, "/health");
+  try {
+    const response = await fetch(url, { method: "GET" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json().catch(() => ({}));
+    return { ok: true, baseUrl, payload };
+  } catch (error) {
+    return { ok: false, baseUrl, error };
+  }
+}
+
 /**
  * Performs an authenticated fetch request against the extension backend.
  *
@@ -41,7 +92,8 @@ async function resolveFirebaseToken() {
  */
 export async function makeAuthenticatedRequest(path, options = {}) {
   const token = await resolveFirebaseToken();
-  const url = `${extCfg.serverBaseUrl}${path}`;
+  const baseUrl = await resolveServerBaseUrl();
+  const url = buildRequestUrl(baseUrl, path);
 
   const headers = {
     "Content-Type": "application/json",
@@ -67,6 +119,7 @@ export async function makeAuthenticatedRequest(path, options = {}) {
     }
     const error = new Error(`Request failed: ${response.status} ${errorDetail}`);
     error.status = response.status;
+    error.url = url;
     throw error;
   }
 
@@ -84,4 +137,9 @@ export async function makeAuthenticatedRequest(path, options = {}) {
   } catch (error) {
     return text;
   }
+}
+
+export async function authenticatedSearch(query, topK = 20) {
+  const params = new URLSearchParams({ q: query, top_k: String(topK) });
+  return makeAuthenticatedRequest(`/search?${params.toString()}`);
 }
