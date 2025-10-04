@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "700625261564",
+    "project_id": "source-bruh",
+    "storage_bucket": "source-bruh.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:700625261564:android:0de9b9e5a8167efac5d879",
+        "android_client_info": {
+          "package_name": "com.sourcebruh.android"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "700625261564-ebmg8ocpkbg61fjgvm916etjldo90kn6.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD2J-bf5Hf3tI69NGxZLBSJPTaeYY7gh-w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "700625261564-cebfdm3in6hn7rn168gj7up6d59etjn6.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
