@@ -42,7 +42,8 @@ class SearchResponseItem(BaseModel):
 
 class SettingsResponse(BaseModel):
     email: str
-    album_url: str
+    album_url: str = ""
+    album_title: Optional[str] = None
     gemini_key_set: bool
 
 
@@ -67,6 +68,27 @@ def _normalize_album_path(value: Optional[str]) -> str:
         path = parsed.path.strip("/")
         return path
     return raw.strip("/")
+
+
+def _split_album_source(value: Optional[str]) -> tuple[str, str]:
+    """Returns ``(album_path, album_title)`` from user-provided ``value``."""
+
+    raw = (value or "").strip()
+    if not raw:
+        return "", ""
+
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except ValueError:
+        parsed = None
+
+    looks_like_url = bool(parsed and parsed.scheme and parsed.netloc)
+    looks_like_path = "/" in raw and not any(ch.isspace() for ch in raw)
+
+    if looks_like_url or looks_like_path:
+        return _normalize_album_path(raw), ""
+
+    return "", raw
 
 
 def create_app(config_path: str = None) -> FastAPI:
@@ -145,12 +167,13 @@ def create_app(config_path: str = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Image not found")
         return Response(content=blob, media_type=mime_type or "image/jpeg")
 
-    @app.get("/settings", response_model=SettingsResponse)
+    @app.get("/settings", response_model=SettingsResponse, response_model_exclude_none=True)
     async def get_settings(user: dict = Depends(get_current_user)):
         """Endpoint to get user settings."""
         uid = user["uid"]
         user_settings = db.get_user_settings(uid) or {}
-        album_url = user_settings.get("album_url", "")
+        album_url = (user_settings.get("album_url") or "").strip()
+        album_title = (user_settings.get("album_title") or "").strip()
 
         if hasattr(db, "get_secret"):
             stored_secret = db.get_secret(uid, "gemini_api_key")
@@ -175,6 +198,7 @@ def create_app(config_path: str = None) -> FastAPI:
         return SettingsResponse(
             email=email,
             album_url=album_url,
+            album_title=album_title or None,
             gemini_key_set=gemini_key_set,
         )
 
@@ -198,7 +222,7 @@ def create_app(config_path: str = None) -> FastAPI:
 
     @app.post("/settings/album-url")
     def update_album_url(body: UpdateAlbumUrlBody, user: dict = Depends(get_current_user)):
-        normalized = _normalize_album_path(body.album_url)
+        album_path, album_title = _split_album_source(body.album_url)
         user_id = user["uid"]
         try:
             with open(cfg_path, "r", encoding="utf-8") as f:
@@ -206,15 +230,30 @@ def create_app(config_path: str = None) -> FastAPI:
         except FileNotFoundError:
             current = {}
         photos_cfg = current.setdefault("google_photos", {})
-        photos_cfg["album_url"] = normalized
-        photos_cfg["album_paths"] = [normalized] if normalized else []
+        if album_path:
+            photos_cfg["album_url"] = album_path
+            photos_cfg["album_paths"] = [album_path]
+            photos_cfg["albums"] = []
+        else:
+            photos_cfg["album_url"] = ""
+            photos_cfg["album_paths"] = []
+            photos_cfg["albums"] = [album_title] if album_title else []
         with open(cfg_path, "w", encoding="utf-8") as f:
             json.dump(current, f, indent=2)
-        cfg.setdefault("google_photos", {})["album_url"] = normalized
-        cfg["google_photos"]["album_paths"] = [normalized] if normalized else []
+        cfg.setdefault("google_photos", {})["album_url"] = album_path
+        cfg["google_photos"]["album_paths"] = [album_path] if album_path else []
+        cfg["google_photos"]["albums"] = [album_title] if album_title else []
 
         existing = db.get_user_settings(user_id) or {}
-        existing["album_url"] = normalized
+        if album_path:
+            existing["album_url"] = album_path
+            existing.pop("album_title", None)
+        elif album_title:
+            existing["album_title"] = album_title
+            existing.pop("album_url", None)
+        else:
+            existing.pop("album_url", None)
+            existing.pop("album_title", None)
         if hasattr(db, "save_user_settings"):
             db.save_user_settings(user_id, existing)
 
@@ -222,7 +261,7 @@ def create_app(config_path: str = None) -> FastAPI:
         if email and hasattr(db, "save_user_info"):
             db.save_user_info(user_id, {"email": email})
 
-        return {"ok": True, "album_url": normalized}
+        return {"ok": True, "album_url": album_path, "album_title": album_title}
 
     class UpdateGeminiKeyBody(BaseModel):
         api_key: str
