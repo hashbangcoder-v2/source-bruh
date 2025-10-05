@@ -43,6 +43,8 @@ functions/bin
 functions/gcloud-service-account.json
 # Python bytecode
 functions/__pycache__/
+functions/*.md
+frontend/*.md
 
 # Python virtual environment
 functions/venv/

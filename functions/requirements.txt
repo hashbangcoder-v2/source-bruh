@@ -1,13 +1,25 @@
-fastapi
-uvicorn
-gunicorn
-google-api-python-client
-google-auth-oauthlib
-pillow
-google-generativeai
-omegaconf
-firebase-admin
-python-dotenv
-firebase-functions
-asgiref
-requests
+# Core web framework and ASGI server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+gunicorn>=21.2.0
+
+# Google Cloud services
+firebase-admin>=6.4.0
+firebase-functions>=0.4.0
+google-api-python-client>=2.116.0
+google-auth-oauthlib>=1.2.0
+google-generativeai>=0.3.0
+
+# Image processing
+pillow>=10.2.0
+
+# Utilities
+omegaconf>=2.3.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Logging
+colorlog>=6.8.0
+
+# ASGI utilities (dependency of FastAPI/Uvicorn)
+asgiref>=3.7.0

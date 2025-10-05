@@ -25,6 +25,13 @@ except ImportError:  # pragma: no cover
 
 
 class GooglePhotosClient:
+    """
+    Client for interacting with Google Photos API.
+    
+    Handles OAuth authentication, album listing, and media item retrieval.
+    Credentials are stored per-user in Firestore for multi-tenant support.
+    """
+    
     def __init__(self, cfg: DictConfig | Mapping[str, Any], db: FirestoreDB):
         self.cfg = cfg
         self.db = db
@@ -34,6 +41,10 @@ class GooglePhotosClient:
         self.scopes = list(scopes) if scopes is not None else []
         self.token_store = self._cfg_value("token_store")  # Keep for local dev maybe, but not for cloud
         self.client_secret_path = self._cfg_value("client_secret_path")
+        self.service = None
+        self._credentials = None
+        self.user_email = None
+        self.code_verifier = None
 
     def _cfg_value(self, key: str, default: Any | None = None) -> Any:
         if isinstance(self.cfg, Mapping):
@@ -126,12 +137,80 @@ class GooglePhotosClient:
 
         return creds
 
-    def _build_service(self):
-
-        creds = self._credentials or self._load_credentials_from_db() or self._load_credentials_from_token_store()
+    def _client_config_dict(self) -> dict:
+        """Returns the OAuth client configuration as a dictionary."""
+        if self.oauth_client:
+            return {"web": self.oauth_client.get("web", {}), "installed": self.oauth_client.get("installed", {})}
+        
+        # Fallback: try to load from client_secret_path
+        if self.client_secret_path and os.path.exists(self.client_secret_path):
+            with open(self.client_secret_path, 'r') as f:
+                return json.load(f)
+        
+        # Use the config from oauth_client directly
+        return {"web": self.oauth_client}
+    
+    def _load_credentials_from_db(self, uid: Optional[str] = None) -> Optional[Credentials]:
+        """Load credentials from Firestore for a specific user."""
+        if not uid or not self.db:
+            return None
+        return self.db.get_google_photos_credentials(uid)
+    
+    def _load_credentials_from_token_store(self) -> Optional[Credentials]:
+        """Load credentials from local token store (for development)."""
+        if not self.token_store or not os.path.exists(self.token_store):
+            return None
+        
+        try:
+            with open(self.token_store, 'r') as f:
+                creds_dict = json.load(f)
+            return Credentials(**creds_dict)
+        except Exception:
+            return None
+    
+    def _ensure_credentials(self, creds: Optional[Credentials]) -> Credentials:
+        """Refresh credentials if expired, or authenticate if missing."""
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            return creds
+        
+        if creds and creds.valid:
+            return creds
+        
+        # Need to authenticate
+        return self._authenticate_with_pkce()
+    
+    def _persist_credentials(self, creds: Credentials, uid: Optional[str] = None):
+        """Save credentials to Firestore and/or local token store."""
+        if uid and self.db:
+            self.db.save_google_photos_credentials(uid, creds)
+        
+        # Also save to local token store for development
+        if self.token_store:
+            creds_dict = {
+                "token": creds.token,
+                "refresh_token": creds.refresh_token,
+                "token_uri": creds.token_uri,
+                "client_id": creds.client_id,
+                "client_secret": creds.client_secret,
+                "scopes": creds.scopes,
+            }
+            os.makedirs(os.path.dirname(self.token_store) or '.', exist_ok=True)
+            with open(self.token_store, 'w') as f:
+                json.dump(creds_dict, f)
+    
+    def _ensure_service(self, uid: Optional[str] = None):
+        """Ensure the Photos API service is built and authenticated."""
+        if self.service:
+            return self.service
+        return self._build_service(uid)
+    
+    def _build_service(self, uid: Optional[str] = None):
+        """Build the Google Photos API service with proper authentication."""
+        creds = self._credentials or self._load_credentials_from_db(uid) or self._load_credentials_from_token_store()
         creds = self._ensure_credentials(creds)
         self._credentials = creds
-        self._persist_credentials(creds)
+        self._persist_credentials(creds, uid)
         svc = build('photoslibrary', 'v1', credentials=creds, static_discovery=False)
         try:
             oauth2 = build('oauth2', 'v2', credentials=creds)
@@ -196,10 +275,20 @@ class GooglePhotosClient:
         flow.fetch_token(code=auth_result["code"], code_verifier=code_verifier)
         return flow.credentials
 
-    def list_albums(self, page_size: int = 50) -> List[Dict]:
+    def list_albums(self, page_size: int = 50, uid: Optional[str] = None) -> List[Dict]:
+        """
+        List all Google Photos albums for the authenticated user.
+        
+        Args:
+            page_size: Number of albums to fetch per page
+            uid: User ID for credential lookup (optional)
+            
+        Returns:
+            List of album dictionaries
+        """
         albums: List[Dict] = []
         next_token: Optional[str] = None
-        service = self._ensure_service()
+        service = self._ensure_service(uid)
         while True:
             result = service.albums().list(pageSize=page_size, pageToken=next_token).execute()
             albums.extend(result.get('albums', []))
@@ -208,17 +297,37 @@ class GooglePhotosClient:
                 break
         return albums
 
-    def get_album_by_title(self, title: str) -> Optional[Dict]:
-        for album in self.list_albums():
+    def get_album_by_title(self, title: str, uid: Optional[str] = None) -> Optional[Dict]:
+        """
+        Find an album by its title.
+        
+        Args:
+            title: Album title to search for (case-insensitive)
+            uid: User ID for credential lookup (optional)
+            
+        Returns:
+            Album dictionary if found, None otherwise
+        """
+        for album in self.list_albums(uid=uid):
             if album.get('title', '').lower() == title.lower():
                 return album
         return None
 
-    def get_album_by_path(self, path: str) -> Optional[Dict]:
+    def get_album_by_path(self, path: str, uid: Optional[str] = None) -> Optional[Dict]:
+        """
+        Find an album by its URL path.
+        
+        Args:
+            path: URL path or full URL to the album
+            uid: User ID for credential lookup (optional)
+            
+        Returns:
+            Album dictionary if found, None otherwise
+        """
         normalized = (path or "").strip().strip('/')
         if not normalized:
             return None
-        for album in self.list_albums():
+        for album in self.list_albums(uid=uid):
             product_url = album.get('productUrl', '')
             if product_url:
                 parsed = urllib.parse.urlparse(product_url)
@@ -234,9 +343,20 @@ class GooglePhotosClient:
                     return album
         return None
 
-    def iter_media_items_in_album(self, album_id: str, page_size: int = 100):
+    def iter_media_items_in_album(self, album_id: str, page_size: int = 100, uid: Optional[str] = None):
+        """
+        Iterate through all media items in an album.
+        
+        Args:
+            album_id: Google Photos album ID
+            page_size: Number of items to fetch per page
+            uid: User ID for credential lookup (optional)
+            
+        Yields:
+            Media item dictionaries
+        """
         next_page_token: Optional[str] = None
-        service = self._ensure_service()
+        service = self._ensure_service(uid)
         while True:
             body = {"albumId": album_id, "pageSize": page_size}
             if next_page_token:
@@ -250,6 +370,16 @@ class GooglePhotosClient:
                 break
 
     def download_image_bytes(self, base_url: str, max_size: str) -> bytes:
+        """
+        Download image bytes from Google Photos.
+        
+        Args:
+            base_url: Base URL from Google Photos API
+            max_size: Size parameter (e.g., "w2048-h2048")
+            
+        Returns:
+            Raw image bytes
+        """
         url = f"{base_url}={max_size}"
         resp = requests.get(url, timeout=60)
         resp.raise_for_status()

@@ -7,14 +7,30 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import firebase_admin
 from firebase_admin import credentials, firestore
 from google.oauth2.credentials import Credentials
+from logger_config import get_logger, log_exception
+
+logger = get_logger(__name__)
 
 
 class FirestoreDB:
     def __init__(self, service_account_key_path: str):
-        if not firebase_admin._apps:
-            cred = credentials.Certificate(service_account_key_path)
-            firebase_admin.initialize_app(cred)
-        self.db = firestore.client()
+        logger.info(f"🔥 Initializing Firestore database")
+        logger.debug(f"Service account key: {service_account_key_path}")
+        
+        try:
+            if not firebase_admin._apps:
+                cred = credentials.Certificate(service_account_key_path)
+                firebase_admin.initialize_app(cred)
+                logger.debug("✓ Firebase Admin SDK initialized")
+            else:
+                logger.debug("Firebase Admin SDK already initialized")
+            
+            self.db = firestore.client()
+            logger.info(f"✓ Firestore client connected")
+        except Exception as e:
+            log_exception(logger, "Failed to initialize Firestore", e)
+            raise
+        
         self._use_firestore = True
         self._local_users: Dict[str, Dict[str, Any]] = {}
         self._local_images: Dict[str, Dict[str, Any]] = {}
@@ -71,21 +87,64 @@ class FirestoreDB:
         return None
 
     def search_vectors(self, user_id: str, query_vector: List[float], top_k: int) -> List[Dict[str, Any]]:
-        # This is a simplified search. For production, you'd use a dedicated vector search service
-        # or Firestore's upcoming vector search capabilities.
+        """
+        Performs vector similarity search against stored image embeddings.
+        
+        Note: This is a simplified in-memory implementation. For production scale,
+        consider using Vertex AI Vector Search, Pinecone, or similar services.
+        
+        Args:
+            user_id: User ID to scope the search
+            query_vector: Query embedding vector
+            top_k: Number of top results to return
+            
+        Returns:
+            List of image documents sorted by distance (most similar first)
+        """
         images_ref = self._images_collection(user_id)
         all_images = images_ref.stream()
 
-        # This is a placeholder for actual vector search logic
-        # In a real app, you would not pull all documents and compare locally.
         results = []
         for img in all_images:
             img_dict = img.to_dict()
-            # Faking distance calculation
-            img_dict['distance'] = 0.5 
+            embedding = img_dict.get('embedding', [])
+            
+            if not embedding:
+                continue
+                
+            # Calculate cosine distance
+            distance = self._cosine_distance(query_vector, embedding)
+            img_dict['distance'] = distance
+            img_dict['image_rowid'] = img.id
             results.append(img_dict)
 
         return sorted(results, key=lambda x: x['distance'])[:top_k]
+    
+    def search(self, query_embedding: List[float], top_k: int = 20, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Main search interface called by server endpoints.
+        
+        Args:
+            query_embedding: Query vector to search for
+            top_k: Number of results to return
+            user_id: User ID to scope search to specific user's images
+            
+        Returns:
+            List of image documents with distance scores
+        """
+        logger.info(f"🔍 Searching images (top_k={top_k}, user={user_id})")
+        
+        if not user_id:
+            logger.error("✗ user_id is required for search")
+            raise ValueError("user_id is required for search")
+        
+        try:
+            results = self.search_vectors(user_id, query_embedding, top_k)
+            logger.info(f"✓ Search completed: found {len(results)} results")
+            return results
+        except Exception as e:
+            log_exception(logger, f"Search failed for user {user_id}", e)
+            raise
     def get_image_blob(self, image_id: str | int, prefer_thumb: bool = False) -> Tuple[Optional[bytes], Optional[str]]:
         """Return raw image bytes and mime type for ``image_id``.
 

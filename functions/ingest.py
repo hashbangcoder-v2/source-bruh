@@ -20,6 +20,16 @@ except ImportError:  # pragma: no cover
 
 
 def create_thumbnail(image_bytes: bytes, max_size: int = 320) -> bytes:
+    """
+    Create a thumbnail from image bytes.
+    
+    Args:
+        image_bytes: Original image data
+        max_size: Maximum dimension (width or height) for thumbnail
+        
+    Returns:
+        JPEG-encoded thumbnail bytes
+    """
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     img.thumbnail((max_size, max_size))
     out = io.BytesIO()
@@ -28,11 +38,26 @@ def create_thumbnail(image_bytes: bytes, max_size: int = 320) -> bytes:
 
 
 def ensure_dirs(*dirs: List[str]) -> None:
+    """
+    Ensure that all specified directories exist.
+    
+    Args:
+        *dirs: Variable number of directory paths to create
+    """
     for d in dirs:
         os.makedirs(d, exist_ok=True)
 
 
 def _coerce_list(values: Optional[Iterable[str]]) -> List[str]:
+    """
+    Coerce a value into a list of strings.
+    
+    Args:
+        values: String, iterable of strings, or None
+        
+    Returns:
+        List of non-empty strings
+    """
     if not values:
         return []
     if isinstance(values, str):
@@ -41,6 +66,15 @@ def _coerce_list(values: Optional[Iterable[str]]) -> List[str]:
 
 
 def _normalize_album_path(value: str) -> str:
+    """
+    Normalize a Google Photos album URL or path.
+    
+    Args:
+        value: Raw URL or path string
+        
+    Returns:
+        Normalized path without leading/trailing slashes
+    """
     raw = (value or "").strip()
     if not raw:
         return raw
@@ -55,6 +89,15 @@ def _normalize_album_path(value: str) -> str:
 
 
 def _parse_creation_time(value: Optional[str]) -> Optional[datetime.datetime]:
+    """
+    Parse a Google Photos creation time string into a datetime.
+    
+    Args:
+        value: ISO format datetime string (possibly with 'Z' suffix)
+        
+    Returns:
+        Parsed datetime or None if invalid
+    """
     if not value:
         return None
     try:
@@ -74,6 +117,24 @@ def ingest_once(
     gemini_client: Optional[GeminiClient] = None,
     user_id: Optional[str] = None,
 ) -> None:
+    """
+    Ingest images from configured Google Photos albums into Firestore.
+    
+    This function:
+    1. Loads configuration from config.yaml
+    2. Authenticates with Google Photos
+    3. Fetches images from configured albums
+    4. Generates descriptions using Gemini
+    5. Creates embeddings for semantic search
+    6. Stores everything in Firestore
+    
+    Args:
+        config_path: Path to config.yaml (optional, defaults to ./config.yaml)
+        db: Pre-initialized Firestore DB client (optional)
+        photos_client: Pre-initialized Google Photos client (optional)
+        gemini_client: Pre-initialized Gemini client (optional)
+        user_id: User ID to associate images with (optional, defaults from config)
+    """
     cfg = load_config(config_path)
 
     storage_cfg = cfg.get("storage", {})
@@ -92,15 +153,7 @@ def ingest_once(
 
     photos_cfg = cfg.get("google_photos", {})
     if photos_client is None:
-        photos_client = GooglePhotosClient(
-            client_secret_path=photos_cfg.get("client_secret_path"),
-            scopes=photos_cfg.get("scopes", []),
-            redirect_port=int(photos_cfg.get("redirect_port", 1008)),
-            token_store=photos_cfg.get("token_store"),
-            oauth_client=photos_cfg.get("oauth_client"),
-            db=db,
-            user_id=resolved_user_id,
-        )
+        photos_client = GooglePhotosClient(cfg=photos_cfg, db=db)
 
     if gemini_client is None:
         llm_cfg = cfg.get("llm", {})
