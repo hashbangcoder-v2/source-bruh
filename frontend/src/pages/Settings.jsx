@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
-import { auth } from "../firebase";
+import React, { useState, useEffect, useCallback } from "react";
+import { auth, db } from "../firebase";
 import { signOut, onAuthStateChanged } from "firebase/auth";
-import { makeAuthenticatedRequest } from "../api";
+import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { makeAuthenticatedRequest, getServerBaseUrl, checkBackendHealth } from "../api";
 
 /**
  * Path to the offscreen document that hosts the Firebase auth flow.
@@ -50,8 +51,8 @@ async function createOffscreenDocument() {
  */
 function Settings({ onBackToHome = null }) {
   const [user, setUser] = useState(null);
-  const [albumUrl, setAlbumUrl] = useState("");
-  const [albumUrlDraft, setAlbumUrlDraft] = useState("");
+  const [albumSource, setAlbumSource] = useState("");
+  const [albumSourceDraft, setAlbumSourceDraft] = useState("");
   const [geminiPresent, setGeminiPresent] = useState(false);
   const [editAlbum, setEditAlbum] = useState(false);
   const [editKey, setEditKey] = useState(false);
@@ -61,13 +62,51 @@ function Settings({ onBackToHome = null }) {
   const [savingAlbum, setSavingAlbum] = useState(false);
   const [savingKey, setSavingKey] = useState(false);
   const [loadingSettings, setLoadingSettings] = useState(true);
+  const [serverBaseUrl, setServerBaseUrl] = useState("");
+  const [checkingServer, setCheckingServer] = useState(false);
+  const [serverStatus, setServerStatus] = useState(null);
+
+  const persistUserProfile = useCallback(async (firebaseUser) => {
+    if (!firebaseUser) {
+      return;
+    }
+    try {
+      const userRef = doc(db, "users", firebaseUser.uid);
+      await setDoc(
+        userRef,
+        {
+          user_info: {
+            email: firebaseUser.email || "",
+            displayName: firebaseUser.displayName || "",
+            photoURL: firebaseUser.photoURL || "",
+          },
+          lastLoginAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (error) {
+      console.error("Failed to persist user profile", error);
+    }
+    }, []);
 
   useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const base = await getServerBaseUrl();
+        if (mounted) {
+          setServerBaseUrl(base);
+        }
+      } catch (error) {
+        console.warn("Unable to determine server URL", error);
+      }
+    })();
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (!currentUser) {
-        setAlbumUrl("");
-        setAlbumUrlDraft("");
+        setAlbumSource("");
+        setAlbumSourceDraft("");
         setGeminiPresent(false);
         setLoadingSettings(false);
         setStatusMessage("");
@@ -77,17 +116,18 @@ function Settings({ onBackToHome = null }) {
 
       setLoadingSettings(true);
       try {
+        await persistUserProfile(currentUser);
         const settings = await makeAuthenticatedRequest("/settings");
-        const normalized = settings?.album_url || "";
-        setAlbumUrl(normalized);
-        setAlbumUrlDraft(normalized);
+        const normalized = (settings?.album_title || settings?.album_url || "").trim();
+        setAlbumSource(normalized);
+        setAlbumSourceDraft(normalized);
         setGeminiPresent(Boolean(settings?.gemini_key_set));
         setStatusMessage("");
         setErrorMessage("");
       } catch (error) {
         if (error.status === 404) {
-          setAlbumUrl("");
-          setAlbumUrlDraft("");
+          setAlbumSource("");
+          setAlbumSourceDraft("");
           setGeminiPresent(false);
         } else {
           console.error("Failed to fetch settings:", error);
@@ -97,8 +137,11 @@ function Settings({ onBackToHome = null }) {
         setLoadingSettings(false);
       }
     });
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, [persistUserProfile]);
 
   // Set up a listener for messages from the offscreen document
   useEffect(() => {
@@ -109,6 +152,9 @@ function Settings({ onBackToHome = null }) {
       if (message.type === 'firebase-login-success') {
         setStatusMessage('Signed in successfully.');
         setErrorMessage("");
+        if (auth.currentUser) {
+          persistUserProfile(auth.currentUser);
+        }
         if (onBackToHome) {
           onBackToHome();
         }
@@ -121,7 +167,7 @@ function Settings({ onBackToHome = null }) {
     return () => {
       chrome.runtime.onMessage.removeListener(messageListener);
     };
-  }, []);
+  }, [persistUserProfile, onBackToHome]);
 
   const handleLogin = async () => {
     if (typeof chrome === 'undefined') {
@@ -152,9 +198,10 @@ function Settings({ onBackToHome = null }) {
   };
 
   /**
-   * Normalises Google Photos album URLs into the backend-friendly path form.
+   * Normalises user input so album names remain intact while URLs are reduced
+   * to the path fragment expected by the backend.
    */
-  const normalizeAlbumPath = (value) => {
+  const normalizeAlbumInput = (value) => {
     const trimmed = (value || "").trim();
     if (!trimmed) return "";
     try {
@@ -169,30 +216,37 @@ function Settings({ onBackToHome = null }) {
     }
   };
 
-  const saveAlbumUrl = async () => {
-    const normalized = normalizeAlbumPath(albumUrlDraft);
+  const saveAlbumSource = async () => {
+    const normalized = normalizeAlbumInput(albumSourceDraft);
     setSavingAlbum(true);
     setStatusMessage("");
     setErrorMessage("");
     try {
-      await makeAuthenticatedRequest("/settings/album-url", {
+      const response = await makeAuthenticatedRequest("/settings/album-url", {
         method: "POST",
         body: JSON.stringify({ album_url: normalized }),
       });
-      setAlbumUrl(normalized);
-      setAlbumUrlDraft(normalized);
+      const savedTitle = response?.album_title || "";
+      const savedUrl = response?.album_url || "";
+      const nextValue = savedTitle || savedUrl || normalized;
+      setAlbumSource(nextValue);
+      setAlbumSourceDraft(nextValue);
       setEditAlbum(false);
       setStatusMessage('Sources updated.');
     } catch (error) {
       console.error("Failed to save album path", error);
-      setErrorMessage('Could not save the source album.');
+      if (error?.status === 404 && error?.url) {
+        setErrorMessage(`Could not reach ${error.url}. Check that the deployed functions URL is correct.`);
+      } else {
+        setErrorMessage('Could not save the source album.');
+      }
     } finally {
       setSavingAlbum(false);
     }
   };
 
   const cancelAlbumEdit = () => {
-    setAlbumUrlDraft(albumUrl);
+    setAlbumSourceDraft(albumSource);
     setEditAlbum(false);
   };
 
@@ -216,7 +270,11 @@ function Settings({ onBackToHome = null }) {
       setStatusMessage('API key stored securely.');
     } catch (error) {
       console.error("Failed to store API key", error);
-      setErrorMessage('Could not store the API key.');
+      if (error?.status === 404 && error?.url) {
+        setErrorMessage(`Could not reach ${error.url}. Check that the deployed functions URL is correct.`);
+      } else {
+        setErrorMessage('Could not store the API key.');
+      }
     } finally {
       setSavingKey(false);
     }
@@ -225,6 +283,20 @@ function Settings({ onBackToHome = null }) {
   const cancelKeyEdit = () => {
     setKeyDraft("");
     setEditKey(false);
+  };
+
+  const handleVerifyServer = async () => {
+    setCheckingServer(true);
+    setServerStatus(null);
+    const result = await checkBackendHealth();
+    setCheckingServer(false);
+    setServerStatus(result);
+    if (result.ok) {
+      setStatusMessage(`Backend reachable at ${result.baseUrl}.`);
+      setErrorMessage("");
+    } else {
+      setErrorMessage(`Backend at ${result.baseUrl} is not reachable. ${result.error?.message || ''}`.trim());
+    }
   };
 
   return (
@@ -252,23 +324,23 @@ function Settings({ onBackToHome = null }) {
           <div className="field-label">Sources</div>
           <div className="field-value">
             <input
-              value={editAlbum ? albumUrlDraft : albumUrl}
-              onChange={(e) => setAlbumUrlDraft(e.target.value)}
+              value={editAlbum ? albumSourceDraft : albumSource}
+              onChange={(e) => setAlbumSourceDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && editAlbum) saveAlbumUrl();
+                if (e.key === 'Enter' && editAlbum) saveAlbumSource();
               }}
-              placeholder="https://photos.google.com/share/..."
+              placeholder="Google Photos album link or name"
               className="input"
               disabled={!editAlbum}
             />
             <div className="flex items-center gap-1">
               {!editAlbum ? (
-                <button className="icon-btn" onClick={() => { setAlbumUrlDraft(albumUrl); setEditAlbum(true); }} title="Edit">
+                <button className="icon-btn" onClick={() => { setAlbumSourceDraft(albumSource); setEditAlbum(true); }} title="Edit">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                 </button>
               ) : (
                 <>
-                  <button className="icon-btn" onClick={saveAlbumUrl} title="Confirm" style={{ color: '#16a34a' }} disabled={savingAlbum}>
+                  <button className="icon-btn" onClick={saveAlbumSource} title="Confirm" style={{ color: '#16a34a' }} disabled={savingAlbum}>
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                   </button>
                   <button className="icon-btn" onClick={cancelAlbumEdit} title="Cancel" disabled={savingAlbum}>
@@ -317,6 +389,23 @@ function Settings({ onBackToHome = null }) {
             {statusMessage && <p className="text-emerald-600">{statusMessage}</p>}
             {errorMessage && <p className="text-rose-600">{errorMessage}</p>}
           </div>
+        )}
+      </div>
+
+      <div className="space-y-2 border-t border-neutral-200 pt-3 text-xs text-neutral-600">
+        <div className="font-medium text-neutral-700">Backend</div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate" title={serverBaseUrl || 'Unknown backend'}>
+            {serverBaseUrl || 'Backend URL unavailable'}
+          </span>
+          <button className="btn" onClick={handleVerifyServer} disabled={checkingServer}>
+            {checkingServer ? 'Checking…' : 'Verify connection'}
+          </button>
+        </div>
+        {serverStatus && !serverStatus.ok && (
+          <p className="text-rose-600">
+            Unable to contact the backend. Confirm that the Firebase Function URL above is correct and deployed.
+          </p>
         )}
       </div>
     </div>

@@ -7,7 +7,7 @@ import Settings from "./pages/Settings";
 import extCfg from "./extension-config.json";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
-import { makeAuthenticatedRequest } from "./api";
+import { makeAuthenticatedRequest, authenticatedSearch } from "./api";
 
 /**
  * Root component for the Chrome extension popup. It orchestrates the
@@ -60,7 +60,7 @@ export default function ExtensionPopup() {
         next[next.length - 1] = "query";
         return next;
       });
-      const results = await makeAuthenticatedRequest(`/search?q=${query}`);
+      const results = await authenticatedSearch(query);
       setSearchResults(results);
     } catch (error) {
       setError("Failed to search. Is the local server running?");
@@ -74,34 +74,31 @@ export default function ExtensionPopup() {
     }
   }
 
-  const checkReadinessAndRoute = async () => {
+  const checkReadinessAndRoute = useCallback(async () => {
+    if (!user) {
+      setViewStack(["settings"]);
+      return;
+    }
+
     try {
-      // No need to check local storage for token, auth state is the source of truth
-      if (!user) {
-        setViewStack(["landing"]);
-        return;
-      }
-
       const settings = await makeAuthenticatedRequest("/settings");
-
-      if (settings && settings.album_url && settings.gemini_key_set) {
-        setViewStack((stack) => {
-          const nextStack = [...stack];
-          nextStack[nextStack.length - 1] = "query";
-          return nextStack;
-        });
+      if (settings?.gemini_key_set) {
+        setError("");
+        setViewStack(["query"]);
       } else {
-        setViewStack(["landing"]);
+        setError("");
+        setViewStack(["settings"]);
       }
     } catch (error) {
       console.error("Failed to check readiness:", error);
-      setViewStack(["landing"]); // Fallback to landing on error
+      setError("");
+      setViewStack(["settings"]);
     }
-  };
+  }, [user]);
 
-  function goFromLanding() {
+  const goFromLanding = useCallback(() => {
     checkReadinessAndRoute();
-  }
+  }, [checkReadinessAndRoute]);
 
   const openSettings = useCallback(() => {
     setViewStack((stack) => [...stack, "settings"]);

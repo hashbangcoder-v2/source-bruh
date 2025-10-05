@@ -4,6 +4,7 @@ const DEFAULT_GOOGLE_SCOPES = [
   "openid",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/photoslibrary.readonly",
 ];
 
 function getConfiguredScopes() {
@@ -104,9 +105,9 @@ async function runChromeIdentityOAuth() {
 
 /**
  * Identifier for the extension context-menu entry that lets users index
- * images directly from any web page via "Source-Me-Bruh".
+ * images directly from any web page via "Source-up-Bruh".
  */
-const MENU_ID = "source-me-bruh";
+const MENU_ID = "source-up-bruh";
 
 /**
  * Ensures the context menu entry exists. Chrome MV3 service workers can be
@@ -127,7 +128,7 @@ function ensureContextMenu() {
 
     chrome.contextMenus.create({
       id: MENU_ID,
-      title: "Source-Me-Bruh",
+      title: "Source-up-Bruh",
       contexts: ["image"],
     });
   });
