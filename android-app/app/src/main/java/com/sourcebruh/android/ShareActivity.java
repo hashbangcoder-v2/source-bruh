@@ -11,6 +11,7 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.storage.FirebaseStorage;
 import com.google.firebase.storage.StorageReference;
+import com.sourcebruh.android.network.BackendClient;
 
 import java.util.UUID;
 
@@ -21,38 +22,69 @@ public class ShareActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
 
         Intent intent = getIntent();
+        if (intent == null) {
+            finish();
+            return;
+        }
         String action = intent.getAction();
         String type = intent.getType();
 
-        if (Intent.ACTION_SEND.equals(action) && type != null) {
-            if (type.startsWith("image/")) {
-                handleSharedImage(intent);
-            }
+        if (Intent.ACTION_SEND.equals(action) && type != null && type.startsWith("image/")) {
+            handleSharedImage(intent);
+        } else {
+            finish();
         }
-        finish();
     }
 
     private void handleSharedImage(Intent intent) {
-        Uri imageUri = (Uri) intent.getParcelableExtra(Intent.EXTRA_STREAM);
-        if (imageUri != null) {
-            FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
-            if (user != null) {
-                uploadImageToFirebase(imageUri, user.getUid());
-            } else {
-                Toast.makeText(this, "You must be logged in to share images", Toast.LENGTH_SHORT).show();
-            }
+        Uri imageUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        if (imageUri == null) {
+            Toast.makeText(getApplicationContext(), getString(R.string.share_no_image), Toast.LENGTH_SHORT).show();
+            finish();
+            return;
         }
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) {
+            Toast.makeText(getApplicationContext(), getString(R.string.share_login_required), Toast.LENGTH_LONG).show();
+            startActivity(new Intent(this, LoginActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));
+            finish();
+            return;
+        }
+        uploadImageToFirebase(imageUri, user.getUid());
     }
 
     private void uploadImageToFirebase(Uri imageUri, String userId) {
         StorageReference storageRef = FirebaseStorage.getInstance().getReference();
-        StorageReference imageRef = storageRef.child("images/" + userId + "/" + UUID.randomUUID().toString());
+        StorageReference imageRef = storageRef.child("shared/" + userId + "/" + UUID.randomUUID() + ".jpg");
+
+        Toast.makeText(getApplicationContext(), getString(R.string.uploading_image), Toast.LENGTH_SHORT).show();
 
         imageRef.putFile(imageUri)
-                .addOnSuccessListener(taskSnapshot -> {
-                    Toast.makeText(ShareActivity.this, "Image uploaded for indexing", Toast.LENGTH_SHORT).show();
-                    // TODO: Trigger a Firebase Function to index the image
+                .continueWithTask(task -> {
+                    if (!task.isSuccessful()) {
+                        throw task.getException() != null ? task.getException() : new RuntimeException("Upload failed");
+                    }
+                    return imageRef.getDownloadUrl();
                 })
-                .addOnFailureListener(e -> Toast.makeText(ShareActivity.this, "Failed to upload image", Toast.LENGTH_SHORT).show());
+                .addOnSuccessListener(this, uri -> {
+                    String downloadUrl = uri.toString();
+                    BackendClient.addImageFromUrl(this, downloadUrl, null, new BackendClient.BackendCallback<Void>() {
+                        @Override
+                        public void onSuccess(Void result) {
+                            Toast.makeText(getApplicationContext(), getString(R.string.share_upload_success), Toast.LENGTH_LONG).show();
+                            finish();
+                        }
+
+                        @Override
+                        public void onError(Exception e) {
+                            Toast.makeText(getApplicationContext(), e.getMessage(), Toast.LENGTH_LONG).show();
+                            finish();
+                        }
+                    });
+                })
+                .addOnFailureListener(e -> {
+                    Toast.makeText(getApplicationContext(), getString(R.string.share_upload_failure), Toast.LENGTH_LONG).show();
+                    finish();
+                });
     }
 }
