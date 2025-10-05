@@ -1,3 +1,34 @@
 <resources>
     <string name="app_name">Source-Bruh</string>
+    <string name="login_title">Source Bruh?</string>
+    <string name="login_tagline">Your visual source of truth on the go.</string>
+    <string name="login_button">Login with Google</string>
+    <string name="query_title">Need a source?</string>
+    <string name="query_hint">Describe the chart, infographic, or topic</string>
+    <string name="query_helper">Tip: Try “GDP bar chart 2010-2020” or “infographic safety signs”.</string>
+    <string name="settings_title">Settings</string>
+    <string name="settings_api_key">Gemini API Key</string>
+    <string name="settings_api_key_configured">Configured</string>
+    <string name="settings_api_key_not_configured">Not configured</string>
+    <string name="settings_sources">Google Photos Album</string>
+    <string name="settings_optional">Optional</string>
+    <string name="settings_user_info">Signed in as</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_edit">Edit</string>
+    <string name="settings_update">Update</string>
+    <string name="settings_cancel">Cancel</string>
+    <string name="settings_sign_out">Sign out</string>
+    <string name="settings_status_saving">Saving…</string>
+    <string name="settings_status_saved">Saved</string>
+    <string name="backend_base_url">https://us-central1-source-bruh.cloudfunctions.net/api</string>
+    <string name="error_api_key_required">Add your Gemini API key in Settings to run searches.</string>
+    <string name="open_settings">Open Settings</string>
+    <string name="dismiss">Dismiss</string>
+    <string name="searching">Searching…</string>
+    <string name="no_results">No results yet.</string>
+    <string name="uploading_image">Uploading image…</string>
+    <string name="share_upload_success">Image queued for indexing</string>
+    <string name="share_upload_failure">Failed to upload image</string>
+    <string name="share_login_required">Sign in to Source-Bruh first</string>
+    <string name="share_no_image">No image found</string>
 </resources>

@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="colorPrimary">#000000</color>
-    <color name="colorPrimaryDark">#000000</color>
-    <color name="colorAccent">#FFFFFF</color>
+    <color name="colorPrimary">#08090A</color>
+    <color name="colorPrimaryDark">#050506</color>
+    <color name="colorAccent">#4FD1FF</color>
+    <color name="textPrimary">#FFFFFFFF</color>
+    <color name="textSecondary">#B3FFFFFF</color>
+    <color name="surfaceDark">#111217</color>
+    <color name="surfaceDarker">#15171E</color>
+    <color name="chipBorder">#2B2D38</color>
 </resources>
