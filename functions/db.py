@@ -186,8 +186,10 @@ class FirestoreDB:
             doc = doc_ref.get()
             if not doc.exists:
                 return {}
-            return doc.to_dict().get("settings", {})
-        return self._local_users.get(uid, {}).get("settings", {})
+            settings = (doc.to_dict() or {}).get("settings", {})
+            return settings if isinstance(settings, dict) else {}
+        settings = self._local_users.get(uid, {}).get("settings", {})
+        return settings if isinstance(settings, dict) else {}
 
     def save_user_settings(self, uid: str, settings: dict):
         """Saves a user's settings."""
@@ -280,8 +282,10 @@ class FirestoreDB:
             doc = doc_ref.get()
             if not doc.exists:
                 return {}
-            return doc.to_dict().get("user_info", {})
-        return self._local_users.get(uid, {}).get("user_info", {})
+            user_info = (doc.to_dict() or {}).get("user_info", {})
+            return user_info if isinstance(user_info, dict) else {}
+        user_info = self._local_users.get(uid, {}).get("user_info", {})
+        return user_info if isinstance(user_info, dict) else {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -304,11 +308,23 @@ class FirestoreDB:
         key = str(image_id)
         if self._use_firestore:
             doc = self.db.collection(self._IMAGES_COLLECTION).document(key).get()
-            if not doc.exists:
-                return None
-            data = doc.to_dict() or {}
-            data.setdefault("image_rowid", key)
-            return data
+            if doc.exists:
+                data = doc.to_dict() or {}
+                data.setdefault("image_rowid", key)
+                return data
+
+            matches = (
+                self.db.collection_group(self._IMAGES_COLLECTION)
+                .where("google_media_id", "==", key)
+                .limit(1)
+                .stream()
+            )
+            for match in matches:
+                data = match.to_dict() or {}
+                data.setdefault("image_rowid", match.id)
+                return data
+
+            return None
         return self._local_images.get(key)
 
     @staticmethod

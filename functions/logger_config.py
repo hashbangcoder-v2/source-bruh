@@ -11,6 +11,18 @@ from typing import Optional
 import colorlog
 
 
+def _safe_console_stream():
+    """Return stdout configured to tolerate Unicode log messages on Windows."""
+    stream = sys.stdout
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure:
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (TypeError, ValueError, OSError):
+            pass
+    return stream
+
+
 def setup_logger(
     name: str = "source-bruh",
     level: Optional[str] = None,
@@ -57,7 +69,7 @@ def setup_logger(
         return logger
     
     # Console handler with color
-    console_handler = colorlog.StreamHandler(sys.stdout)
+    console_handler = colorlog.StreamHandler(_safe_console_stream())
     console_handler.setLevel(log_level)
     
     # Color formatter

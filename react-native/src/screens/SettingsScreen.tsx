@@ -1,0 +1,476 @@
+import React, {useEffect, useState} from 'react';
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import {FirebaseAuthTypes} from '@react-native-firebase/auth';
+import {StatusText} from '../components/StatusText';
+import {
+  getSettings,
+  saveAlbumUrl,
+  saveGeminiKey,
+  testHealth,
+} from '../services/api';
+import {
+  getServerBaseUrl,
+  getLocalServerUrl,
+  getServerMode,
+  setLocalServerUrl,
+  setServerMode,
+} from '../services/storage';
+import {signOut} from '../services/auth';
+import {colors} from '../theme/colors';
+
+type Props = {
+  user: FirebaseAuthTypes.User | null;
+  onBack: () => void;
+};
+
+function normalizeAlbumPath(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.pathname.replace(/\/+/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
+  } catch {
+    return trimmed.replace(/^\/+/, '').replace(/\/$/, '');
+  }
+}
+
+export function SettingsScreen({user, onBack}: Props) {
+  const [albumUrl, setAlbumUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [geminiSet, setGeminiSet] = useState(false);
+  const [useLocal, setUseLocal] = useState(false);
+  const [localUrl, setLocalUrl] = useState('');
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [serverUrl, setServerUrl] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      setLoading(true);
+      setError('');
+
+      try {
+        const [mode, storedLocalUrl, currentServerUrl] = await Promise.all([
+          getServerMode(),
+          getLocalServerUrl(),
+          getServerBaseUrl(),
+        ]);
+        if (!mounted) {
+          return;
+        }
+        setUseLocal(mode === 'local');
+        setLocalUrl(storedLocalUrl);
+        setServerUrl(currentServerUrl);
+      } catch (err) {
+        if (mounted) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'Unable to load local server settings.',
+          );
+        }
+      }
+
+      if (mounted) {
+        setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, [user]);
+
+  const saveSources = async () => {
+    setStatus('');
+    setError('');
+    try {
+      const normalized = normalizeAlbumPath(albumUrl);
+      await saveAlbumUrl(normalized);
+      setAlbumUrl(normalized);
+      setStatus('Sources updated.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save sources.');
+    }
+  };
+
+  const loadAccountSettings = async () => {
+    setStatus('');
+    setError('');
+    if (!user) {
+      setError('Sign in before loading account settings.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const settings = await getSettings();
+      setAlbumUrl(settings.album_url || '');
+      setGeminiSet(Boolean(settings.gemini_key_set));
+      setStatus('Account settings loaded.');
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Unable to load account settings.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveKey = async () => {
+    setStatus('');
+    setError('');
+    if (!apiKey.trim()) {
+      setError('Enter an API key before saving.');
+      return;
+    }
+    try {
+      await saveGeminiKey(apiKey.trim());
+      setApiKey('');
+      setGeminiSet(true);
+      setStatus('API key saved.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save API key.');
+    }
+  };
+
+  const toggleServer = async (enabled: boolean) => {
+    setUseLocal(enabled);
+    await setServerMode(enabled ? 'local' : 'production');
+    const nextUrl = await getServerBaseUrl();
+    setServerUrl(nextUrl);
+    setStatus(`Using ${enabled ? 'local' : 'production'} server.`);
+  };
+
+  const chooseServer = (mode: 'local' | 'production') => {
+    void toggleServer(mode === 'local');
+  };
+
+  const saveLocalUrl = async () => {
+    await setLocalServerUrl(localUrl);
+    const nextUrl = await getServerBaseUrl();
+    setServerUrl(nextUrl);
+    setStatus('Local server URL saved.');
+  };
+
+  const testServer = async () => {
+    setStatus('');
+    setError('');
+    try {
+      const ok = await testHealth();
+      setStatus(ok ? 'Server is reachable.' : '');
+      if (!ok) {
+        setError('Server did not respond to /health.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Connection test failed.');
+    }
+  };
+
+  return (
+    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <View style={styles.header}>
+        <Pressable onPress={onBack} style={({pressed}) => [styles.back, pressed && styles.pressed]}>
+          <Text style={styles.backText}>Back</Text>
+        </Pressable>
+        <Text style={styles.title}>Settings</Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.label}>Backend server</Text>
+        <View style={styles.segmented}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{selected: useLocal}}
+            onPress={() => chooseServer('local')}
+            style={({pressed}) => [
+              styles.segment,
+              useLocal && styles.segmentActive,
+              pressed && styles.pressed,
+            ]}>
+            <Text style={[styles.segmentText, useLocal && styles.segmentTextActive]}>
+              Local
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{selected: !useLocal}}
+            onPress={() => chooseServer('production')}
+            style={({pressed}) => [
+              styles.segment,
+              !useLocal && styles.segmentActive,
+              pressed && styles.pressed,
+            ]}>
+            <Text style={[styles.segmentText, !useLocal && styles.segmentTextActive]}>
+              Production
+            </Text>
+          </Pressable>
+        </View>
+        <View style={styles.row}>
+          <Text style={styles.settingTitle}>Enable local server</Text>
+          <Switch
+            value={useLocal}
+            onValueChange={toggleServer}
+            thumbColor={colors.panel}
+            trackColor={{false: colors.line, true: colors.green}}
+          />
+        </View>
+        <Text style={styles.serverUrl}>{serverUrl || 'Server URL not loaded'}</Text>
+        <TextInput
+          value={localUrl}
+          onChangeText={setLocalUrl}
+          placeholder="http://127.0.0.1:5057"
+          placeholderTextColor={colors.muted}
+          style={styles.input}
+          selectionColor={colors.blue}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <View style={styles.actions}>
+          <Pressable onPress={saveLocalUrl} style={({pressed}) => [styles.secondaryButton, pressed && styles.pressed]}>
+            <Text style={styles.secondaryText}>Save URL</Text>
+          </Pressable>
+          <Pressable onPress={testServer} style={({pressed}) => [styles.secondaryButton, pressed && styles.pressed]}>
+            <Text style={styles.secondaryText}>Test server</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.label}>Signed in</Text>
+        <Text style={styles.value}>
+          {user
+            ? [user.displayName, user.email].filter(Boolean).join(' - ')
+            : loading
+              ? 'Loading...'
+              : 'Not signed in'}
+        </Text>
+        {user ? (
+          <Pressable onPress={signOut} style={({pressed}) => [styles.secondaryButton, pressed && styles.pressed]}>
+            <Text style={styles.secondaryText}>Sign out</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.label}>Google Photos source</Text>
+        <Pressable
+          onPress={loadAccountSettings}
+          disabled={!user || loading}
+          style={({pressed}) => [
+            styles.secondaryButton,
+            (!user || loading) && styles.disabled,
+            pressed && styles.pressed,
+          ]}>
+          <Text style={styles.secondaryText}>
+            {loading ? 'Loading...' : 'Load account settings'}
+          </Text>
+        </Pressable>
+        <TextInput
+          value={albumUrl}
+          onChangeText={setAlbumUrl}
+          placeholder="https://photos.google.com/share/..."
+          placeholderTextColor={colors.muted}
+          style={styles.input}
+          selectionColor={colors.blue}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <Pressable
+          onPress={saveSources}
+          disabled={!user}
+          style={({pressed}) => [
+            styles.primaryButton,
+            !user && styles.disabled,
+            pressed && styles.pressed,
+          ]}>
+          <Text style={styles.primaryText}>Save source</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.label}>Gemini API key</Text>
+        <TextInput
+          value={apiKey}
+          onChangeText={setApiKey}
+          placeholder={geminiSet ? 'Key saved' : 'AIza...'}
+          placeholderTextColor={colors.muted}
+          style={styles.input}
+          selectionColor={colors.blue}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <Pressable
+          onPress={saveKey}
+          disabled={!user}
+          style={({pressed}) => [
+            styles.primaryButton,
+            !user && styles.disabled,
+            pressed && styles.pressed,
+          ]}>
+          <Text style={styles.primaryText}>Save key</Text>
+        </Pressable>
+      </View>
+
+      <StatusText message={status} tone="good" />
+      <StatusText message={error} tone="bad" />
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    backgroundColor: colors.paper,
+    flexGrow: 1,
+    padding: 20,
+    paddingTop: 48,
+  },
+  header: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 22,
+  },
+  back: {
+    alignItems: 'center',
+    backgroundColor: colors.blue,
+    borderRadius: 8,
+    minHeight: 42,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  backText: {
+    color: colors.paper,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  title: {
+    color: colors.ink,
+    fontSize: 30,
+    fontWeight: '800',
+  },
+  section: {
+    borderBottomColor: colors.line,
+    borderBottomWidth: 1,
+    gap: 10,
+    paddingBottom: 18,
+    paddingTop: 16,
+  },
+  label: {
+    color: colors.ink,
+    fontSize: 13,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  value: {
+    color: colors.muted,
+    fontSize: 15,
+  },
+  serverUrl: {
+    color: colors.blue,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  input: {
+    backgroundColor: colors.panel,
+    borderColor: colors.line,
+    borderRadius: 8,
+    borderWidth: 1,
+    color: colors.ink,
+    fontSize: 15,
+    minHeight: 48,
+    paddingHorizontal: 12,
+  },
+  row: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 14,
+    justifyContent: 'space-between',
+  },
+  rowText: {
+    flex: 1,
+  },
+  settingTitle: {
+    color: colors.ink,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  segmented: {
+    backgroundColor: colors.chip,
+    borderColor: colors.line,
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    padding: 3,
+  },
+  segment: {
+    alignItems: 'center',
+    borderRadius: 6,
+    flex: 1,
+    minHeight: 42,
+    justifyContent: 'center',
+  },
+  segmentActive: {
+    backgroundColor: colors.green,
+  },
+  segmentText: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  segmentTextActive: {
+    color: colors.paper,
+  },
+  primaryButton: {
+    alignItems: 'center',
+    backgroundColor: colors.blue,
+    borderRadius: 8,
+    minHeight: 46,
+    justifyContent: 'center',
+  },
+  primaryText: {
+    color: colors.paper,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  secondaryButton: {
+    alignItems: 'center',
+    backgroundColor: colors.panel,
+    borderColor: colors.blue,
+    borderRadius: 8,
+    borderWidth: 1,
+    minHeight: 42,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  secondaryText: {
+    color: colors.blue,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  pressed: {
+    opacity: 0.72,
+  },
+  disabled: {
+    opacity: 0.45,
+  },
+});

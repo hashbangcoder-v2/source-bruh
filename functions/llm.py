@@ -16,23 +16,22 @@ class GeminiClient:
     - Text embedding generation for vector similarity
     """
     
-    def __init__(self, api_key_env: str, oracle_model: str, embedding_model: str) -> None:
+    def __init__(self, api_key: str, oracle_model: str, embedding_model: str) -> None:
         """
         Initialize Gemini client with API key and model configurations.
         
         Args:
-            api_key_env: Environment variable name containing Gemini API key
+            api_key: Gemini API key (retrieved from Firebase Secrets or user settings)
             oracle_model: Model name for image description (e.g., "gemini-1.5-flash-latest")
             embedding_model: Model name for text embeddings (e.g., "text-embedding-004")
             
         Raises:
-            RuntimeError: If API key is not found in environment
+            RuntimeError: If API key is invalid or missing
         """
         logger.info(f"🤖 Initializing Gemini client (oracle={oracle_model}, embedding={embedding_model})")
-        api_key = os.environ.get(api_key_env)
         if not api_key:
-            logger.error(f"✗ Missing API key in environment variable: {api_key_env}")
-            raise RuntimeError(f"Missing API key in env var {api_key_env}")
+            logger.error("✗ Missing or empty API key")
+            raise RuntimeError("Missing API key")
         
         # Mask API key in logs
         masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"

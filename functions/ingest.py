@@ -7,7 +7,7 @@ from typing import Iterable, List, Optional
 
 from PIL import Image
 
-try:  # pragma: no cover - allow running as module or script
+try:  
     from .config_loader import load_config
     from .db import FirestoreDB
     from .photos_client import GooglePhotosClient
