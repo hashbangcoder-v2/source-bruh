@@ -10,7 +10,6 @@ sys.path.insert(0, str(current_dir.parents[2]))
 
 def test_settings_returns_user_info(monkeypatch):
     sample_cfg = {
-        "db": {"service_account_key_path": "dummy"},
         "google_photos": {
             "client_secret_path": "client_secret.json",
             "scopes": ["scope1"],
@@ -20,14 +19,15 @@ def test_settings_returns_user_info(monkeypatch):
         },
         "llm": {
             "api_key_env": "LLM_API_KEY",
-            "oracle_model": "oracle",
-            "embedding_model": "embedding",
+            "embedding_model": "gemini-embedding-2",
         },
+        "db": {"service_account_key_path": "dummy", "dimension": 768, "image_collection": "images_test"},
     }
 
     class DummyFirestoreDB:
-        def __init__(self, service_account_path):
+        def __init__(self, service_account_path, image_collection="images"):
             self.service_account_path = service_account_path
+            self.image_collection = image_collection
 
         def get_user_settings(self, uid):
             return {"album_url": "https://example.com/album", "gemini_api_key": "secret"}

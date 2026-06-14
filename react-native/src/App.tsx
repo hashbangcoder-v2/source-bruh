@@ -144,7 +144,8 @@ export default function App() {
       ) : user && screen === 'query' ? (
         <QueryScreen
           onSettings={() => setScreen('settings')}
-          shareStatus={shareError || shareStatus}
+          shareStatus={shareStatus}
+          shareError={shareError}
         />
       ) : (
         <LoginScreen

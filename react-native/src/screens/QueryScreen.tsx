@@ -18,6 +18,7 @@ import {colors} from '../theme/colors';
 type Props = {
   onSettings: () => void;
   shareStatus?: string;
+  shareError?: string;
 };
 
 type TileProps = {
@@ -69,7 +70,7 @@ function ResultTile({item, onPress}: TileProps) {
   );
 }
 
-export function QueryScreen({onSettings, shareStatus}: Props) {
+export function QueryScreen({onSettings, shareStatus, shareError}: Props) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -106,38 +107,50 @@ export function QueryScreen({onSettings, shareStatus}: Props) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
+      <IconButton
+        label="Settings"
+        symbol="⚙"
+        onPress={onSettings}
+        hitSlop={10}
+        style={styles.settingsButton}
+      />
+
+      <View
+        style={[
+          styles.searchShell,
+          results.length ? styles.searchShellWithResults : styles.searchShellHome,
+        ]}>
         <Text style={styles.title}>Need a source?</Text>
-        <IconButton label="Settings" symbol="⚙" onPress={onSettings} />
-      </View>
 
-      <View style={styles.searchRow}>
-        <TextInput
-          value={query}
-          onChangeText={setQuery}
-          onSubmitEditing={() => runSearch()}
-          placeholder="growth OECD post-2020"
-          placeholderTextColor={colors.muted}
-          style={styles.input}
-          autoCapitalize="none"
-          returnKeyType="search"
-        />
-        <IconButton
-          label="Search"
-          symbol="⌕"
-          disabled={!query.trim() || loading}
-          onPress={() => runSearch()}
-        />
-      </View>
+        <View style={styles.searchRow}>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            onSubmitEditing={() => runSearch()}
+            placeholder="growth OECD post-2020"
+            placeholderTextColor={colors.muted}
+            style={styles.input}
+            autoCapitalize="none"
+            returnKeyType="search"
+          />
+          <IconButton
+            label="Search"
+            symbol="⌕"
+            disabled={!query.trim() || loading}
+            onPress={() => runSearch()}
+          />
+        </View>
 
-      <StatusText message={shareStatus} tone="good" />
-      <StatusText message={error} tone={results.length ? 'neutral' : 'bad'} />
+        <StatusText message={shareStatus} tone="good" />
+        <StatusText message={shareError} tone="bad" />
+        <StatusText message={error} tone={results.length ? 'neutral' : 'bad'} />
+      </View>
 
       {loading && !results.length ? (
         <View style={styles.loading}>
           <ActivityIndicator color={colors.ink} />
         </View>
-      ) : (
+      ) : results.length ? (
         <FlatList
           data={results}
           keyExtractor={item => item.image_rowid}
@@ -154,13 +167,13 @@ export function QueryScreen({onSettings, shareStatus}: Props) {
             ) : null
           }
         />
-      )}
+      ) : null}
 
       <Modal visible={Boolean(selected)} transparent animationType="fade">
         <View style={styles.modalShade}>
           <View style={styles.modalPanel}>
             <Pressable onPress={() => setSelected(null)} style={styles.close}>
-              <Text style={styles.closeText}>×</Text>
+              <Text style={styles.closeText}>x</Text>
             </Pressable>
             {selected ? (
               <>
@@ -195,23 +208,42 @@ const styles = StyleSheet.create({
   container: {
     backgroundColor: colors.paper,
     flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 48,
+    paddingHorizontal: 20,
   },
-  header: {
+  settingsButton: {
+    elevation: 4,
+    position: 'absolute',
+    right: 18,
+    top: 56,
+    zIndex: 10,
+  },
+  searchShell: {
     alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 24,
+    gap: 16,
+    paddingHorizontal: 8,
+  },
+  searchShellHome: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingBottom: 86,
+    paddingTop: 92,
+  },
+  searchShellWithResults: {
+    paddingBottom: 12,
+    paddingTop: 92,
   },
   title: {
     color: colors.ink,
     fontSize: 30,
     fontWeight: '800',
+    textAlign: 'center',
   },
   searchRow: {
+    alignSelf: 'center',
     flexDirection: 'row',
     gap: 10,
+    maxWidth: 560,
+    width: '100%',
   },
   input: {
     backgroundColor: colors.panel,
@@ -281,7 +313,8 @@ const styles = StyleSheet.create({
   },
   closeText: {
     color: colors.ink,
-    fontSize: 28,
+    fontSize: 22,
+    fontWeight: '800',
   },
   previewImage: {
     aspectRatio: 1,

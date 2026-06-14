@@ -76,10 +76,7 @@ class StubPhotosClient:
 
 
 class StubGeminiClient:
-    def describe_image(self, image_bytes: bytes) -> str:
-        return "stub description"
-
-    def embed_text(self, text: str):
+    def embed_image(self, image_bytes: bytes, mime_type: str = "image/jpeg"):
         return [0.1, 0.2, 0.3]
 
 
@@ -97,6 +94,11 @@ class IngestOnceTest(unittest.TestCase):
             images_dir = tmp_path / "images"
             thumbs_dir = tmp_path / "thumbs"
             config_path = tmp_path / "config.yaml"
+            client_secret_path = (tmp_path / "client_secret.json").as_posix()
+            token_store_path = (tmp_path / "token.json").as_posix()
+            service_account_path = (tmp_path / "service-account.json").as_posix()
+            images_dir_path = images_dir.as_posix()
+            thumbs_dir_path = thumbs_dir.as_posix()
 
             config_text = textwrap.dedent(
                 f"""
@@ -105,26 +107,25 @@ class IngestOnceTest(unittest.TestCase):
                   port: 8080
 
                 google_photos:
-                  client_secret_path: "{tmp_path / 'client_secret.json'}"
+                  client_secret_path: "{client_secret_path}"
                   scopes:
                     - "https://www.googleapis.com/auth/photoslibrary.readonly"
                   redirect_port: 1008
                   album_paths:
                     - "album/album-1"
-                  token_store: "{tmp_path / 'token.json'}"
+                  token_store: "{token_store_path}"
 
                 llm:
-                  oracle_model: "dummy"
-                  embedding_model: "dummy-embed"
+                  embedding_model: "gemini-embedding-2"
                   api_key_env: "FAKE_KEY"
 
                 db:
-                  service_account_key_path: "{tmp_path / 'service-account.json'}"
+                  service_account_key_path: "{service_account_path}"
                   user_id: "tester"
 
                 storage:
-                  images_dir: "{images_dir}"
-                  thumbs_dir: "{thumbs_dir}"
+                  images_dir: "{images_dir_path}"
+                  thumbs_dir: "{thumbs_dir_path}"
                   max_download_size: "w800-h800"
                 """
             ).strip()
@@ -145,8 +146,11 @@ class IngestOnceTest(unittest.TestCase):
 
             stored = stub_db.saved["tester"]["media-1"]
             self.assertEqual(stored["album_title"], "Test")
-            self.assertEqual(stored["description"], "stub description")
+            self.assertEqual(stored["description"], "")
             self.assertEqual(stored["embedding"], [0.1, 0.2, 0.3])
+            self.assertEqual(stored["embedding_kind"], "image")
+            self.assertEqual(stored["embedding_model"], "gemini-embedding-2")
+            self.assertEqual(stored["embedding_dim"], 3)
             self.assertEqual(len(stored["sha256"]), 64)
             self.assertEqual(stored["album_path"], "album/album-1")
             self.assertEqual(stored["timestamp_iso"], "2024-01-01T00:00:00Z")
@@ -173,6 +177,11 @@ class IngestOnceTest(unittest.TestCase):
             images_dir = tmp_path / "images"
             thumbs_dir = tmp_path / "thumbs"
             config_path = tmp_path / "config.yaml"
+            client_secret_path = (tmp_path / "client_secret.json").as_posix()
+            token_store_path = (tmp_path / "token.json").as_posix()
+            service_account_path = (tmp_path / "service-account.json").as_posix()
+            images_dir_path = images_dir.as_posix()
+            thumbs_dir_path = thumbs_dir.as_posix()
 
             config_text = textwrap.dedent(
                 f"""
@@ -181,26 +190,25 @@ class IngestOnceTest(unittest.TestCase):
                   port: 8080
 
                 google_photos:
-                  client_secret_path: "{tmp_path / 'client_secret.json'}"
+                  client_secret_path: "{client_secret_path}"
                   scopes:
                     - "https://www.googleapis.com/auth/photoslibrary.readonly"
                   redirect_port: 1008
                   album_paths:
                     - "album/album-1"
-                  token_store: "{tmp_path / 'token.json'}"
+                  token_store: "{token_store_path}"
 
                 llm:
-                  oracle_model: "dummy"
-                  embedding_model: "dummy-embed"
+                  embedding_model: "gemini-embedding-2"
                   api_key_env: "FAKE_KEY"
 
                 db:
-                  service_account_key_path: "{tmp_path / 'service-account.json'}"
+                  service_account_key_path: "{service_account_path}"
                   user_id: "tester"
 
                 storage:
-                  images_dir: "{images_dir}"
-                  thumbs_dir: "{thumbs_dir}"
+                  images_dir: "{images_dir_path}"
+                  thumbs_dir: "{thumbs_dir_path}"
                   max_download_size: "w800-h800"
                 """
             ).strip()

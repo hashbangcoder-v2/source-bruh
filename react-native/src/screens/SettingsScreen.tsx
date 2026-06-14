@@ -3,7 +3,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -12,7 +11,6 @@ import {FirebaseAuthTypes} from '@react-native-firebase/auth';
 import {StatusText} from '../components/StatusText';
 import {
   getSettings,
-  saveAlbumUrl,
   saveGeminiKey,
   testHealth,
 } from '../services/api';
@@ -31,21 +29,7 @@ type Props = {
   onBack: () => void;
 };
 
-function normalizeAlbumPath(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return '';
-  }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.pathname.replace(/\/+/g, '/').replace(/^\/+/, '').replace(/\/$/, '');
-  } catch {
-    return trimmed.replace(/^\/+/, '').replace(/\/$/, '');
-  }
-}
-
 export function SettingsScreen({user, onBack}: Props) {
-  const [albumUrl, setAlbumUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [geminiSet, setGeminiSet] = useState(false);
   const [useLocal, setUseLocal] = useState(false);
@@ -74,6 +58,23 @@ export function SettingsScreen({user, onBack}: Props) {
         setUseLocal(mode === 'local');
         setLocalUrl(storedLocalUrl);
         setServerUrl(currentServerUrl);
+
+        if (user) {
+          try {
+            const settings = await getSettings();
+            if (mounted) {
+              setGeminiSet(Boolean(settings.gemini_key_set));
+            }
+          } catch (settingsError) {
+            if (mounted) {
+              setError(
+                settingsError instanceof Error
+                  ? settingsError.message
+                  : 'Unable to load account settings.',
+              );
+            }
+          }
+        }
       } catch (err) {
         if (mounted) {
           setError(
@@ -94,41 +95,6 @@ export function SettingsScreen({user, onBack}: Props) {
       mounted = false;
     };
   }, [user]);
-
-  const saveSources = async () => {
-    setStatus('');
-    setError('');
-    try {
-      const normalized = normalizeAlbumPath(albumUrl);
-      await saveAlbumUrl(normalized);
-      setAlbumUrl(normalized);
-      setStatus('Sources updated.');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save sources.');
-    }
-  };
-
-  const loadAccountSettings = async () => {
-    setStatus('');
-    setError('');
-    if (!user) {
-      setError('Sign in before loading account settings.');
-      return;
-    }
-    setLoading(true);
-    try {
-      const settings = await getSettings();
-      setAlbumUrl(settings.album_url || '');
-      setGeminiSet(Boolean(settings.gemini_key_set));
-      setStatus('Account settings loaded.');
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Unable to load account settings.',
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const saveKey = async () => {
     setStatus('');
@@ -219,34 +185,33 @@ export function SettingsScreen({user, onBack}: Props) {
             </Text>
           </Pressable>
         </View>
-        <View style={styles.row}>
-          <Text style={styles.settingTitle}>Enable local server</Text>
-          <Switch
-            value={useLocal}
-            onValueChange={toggleServer}
-            thumbColor={colors.panel}
-            trackColor={{false: colors.line, true: colors.green}}
-          />
-        </View>
         <Text style={styles.serverUrl}>{serverUrl || 'Server URL not loaded'}</Text>
-        <TextInput
-          value={localUrl}
-          onChangeText={setLocalUrl}
-          placeholder="http://127.0.0.1:5057"
-          placeholderTextColor={colors.muted}
-          style={styles.input}
-          selectionColor={colors.blue}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <View style={styles.actions}>
-          <Pressable onPress={saveLocalUrl} style={({pressed}) => [styles.secondaryButton, pressed && styles.pressed]}>
-            <Text style={styles.secondaryText}>Save URL</Text>
-          </Pressable>
+        {useLocal ? (
+          <>
+            <TextInput
+              value={localUrl}
+              onChangeText={setLocalUrl}
+              placeholder="http://127.0.0.1:5057"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              selectionColor={colors.blue}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <View style={styles.actions}>
+              <Pressable onPress={saveLocalUrl} style={({pressed}) => [styles.secondaryButton, pressed && styles.pressed]}>
+                <Text style={styles.secondaryText}>Save URL</Text>
+              </Pressable>
+              <Pressable onPress={testServer} style={({pressed}) => [styles.secondaryButton, pressed && styles.pressed]}>
+                <Text style={styles.secondaryText}>Test server</Text>
+              </Pressable>
+            </View>
+          </>
+        ) : (
           <Pressable onPress={testServer} style={({pressed}) => [styles.secondaryButton, pressed && styles.pressed]}>
             <Text style={styles.secondaryText}>Test server</Text>
           </Pressable>
-        </View>
+        )}
       </View>
 
       <View style={styles.section}>
@@ -263,42 +228,6 @@ export function SettingsScreen({user, onBack}: Props) {
             <Text style={styles.secondaryText}>Sign out</Text>
           </Pressable>
         ) : null}
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.label}>Google Photos source</Text>
-        <Pressable
-          onPress={loadAccountSettings}
-          disabled={!user || loading}
-          style={({pressed}) => [
-            styles.secondaryButton,
-            (!user || loading) && styles.disabled,
-            pressed && styles.pressed,
-          ]}>
-          <Text style={styles.secondaryText}>
-            {loading ? 'Loading...' : 'Load account settings'}
-          </Text>
-        </Pressable>
-        <TextInput
-          value={albumUrl}
-          onChangeText={setAlbumUrl}
-          placeholder="https://photos.google.com/share/..."
-          placeholderTextColor={colors.muted}
-          style={styles.input}
-          selectionColor={colors.blue}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <Pressable
-          onPress={saveSources}
-          disabled={!user}
-          style={({pressed}) => [
-            styles.primaryButton,
-            !user && styles.disabled,
-            pressed && styles.pressed,
-          ]}>
-          <Text style={styles.primaryText}>Save source</Text>
-        </Pressable>
       </View>
 
       <View style={styles.section}>
@@ -394,21 +323,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     minHeight: 48,
     paddingHorizontal: 12,
-  },
-  row: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 14,
-    justifyContent: 'space-between',
-  },
-  rowText: {
-    flex: 1,
-  },
-  settingTitle: {
-    color: colors.ink,
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: 4,
   },
   actions: {
     flexDirection: 'row',

@@ -1,7 +1,7 @@
-import os
+import base64
 from typing import List
 
-import google.generativeai as genai
+import requests
 from logger_config import get_logger, log_exception
 
 logger = get_logger(__name__)
@@ -9,100 +9,95 @@ logger = get_logger(__name__)
 
 class GeminiClient:
     """
-    Client for Google Gemini API operations.
-    
-    Provides:
-    - Image description generation for semantic search
-    - Text embedding generation for vector similarity
+    Client for Gemini embedding operations.
+
+    The project intentionally uses direct multimodal embeddings:
+    - images are embedded from bytes for indexing
+    - user search text is embedded as a retrieval query
     """
-    
-    def __init__(self, api_key: str, oracle_model: str, embedding_model: str) -> None:
-        """
-        Initialize Gemini client with API key and model configurations.
-        
-        Args:
-            api_key: Gemini API key (retrieved from Firebase Secrets or user settings)
-            oracle_model: Model name for image description (e.g., "gemini-1.5-flash-latest")
-            embedding_model: Model name for text embeddings (e.g., "text-embedding-004")
-            
-        Raises:
-            RuntimeError: If API key is invalid or missing
-        """
-        logger.info(f"🤖 Initializing Gemini client (oracle={oracle_model}, embedding={embedding_model})")
+
+    def __init__(
+        self,
+        api_key: str,
+        embedding_model: str,
+        output_dimensionality: int = 768,
+    ) -> None:
         if not api_key:
-            logger.error("✗ Missing or empty API key")
+            logger.error("Missing or empty API key")
             raise RuntimeError("Missing API key")
-        
-        # Mask API key in logs
-        masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
-        logger.debug(f"Using API key: {masked_key}")
-        
-        genai.configure(api_key=api_key)
-        self.oracle_model_name = oracle_model
+
+        self.api_key = api_key
         self.embedding_model_name = embedding_model
-        logger.info(f"✓ Gemini client initialized successfully")
+        self.output_dimensionality = output_dimensionality
+        self.endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{embedding_model}:embedContent"
+        )
 
-    def describe_image(self, image_bytes: bytes) -> str:
-        """
-        Generate a concise description of an image for search indexing.
-        
-        The description focuses on:
-        - Text content (labels, titles, captions)
-        - Visual elements (charts, diagrams, icons)
-        - Key entities and objects
-        
-        Args:
-            image_bytes: Raw image data (JPEG format)
-            
-        Returns:
-            Text description (~80 words)
-        """
-        logger.info(f"🖼️  Describing image ({len(image_bytes)} bytes) with {self.oracle_model_name}")
+        masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
+        logger.debug(f"Using Gemini API key: {masked_key}")
+        logger.info(
+            "Gemini client initialized "
+            f"(embedding={embedding_model}, dim={output_dimensionality})"
+        )
+
+    def embed_image(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> List[float]:
+        """Generate an embedding vector directly from image bytes."""
+        logger.debug(f"Generating image embedding ({len(image_bytes)} bytes, {mime_type})")
         try:
-            model = genai.GenerativeModel(self.oracle_model_name)
-            prompt = (
-                "Describe this image concisely for search. Focus on pictograms/infographics/charts. "
-                "Include any readable text, labels, axes, and key entities. Limit to ~80 words."
+            payload = {
+                "content": {
+                    "parts": [
+                        {
+                            "inline_data": {
+                                "mime_type": mime_type or "image/jpeg",
+                                "data": base64.b64encode(image_bytes).decode("ascii"),
+                            }
+                        }
+                    ]
+                },
+                "output_dimensionality": self.output_dimensionality,
+            }
+            return self._embed(payload)
+        except Exception as e:
+            log_exception(logger, "Failed to generate image embedding", e)
+            raise
+
+    def embed_query(self, text: str) -> List[float]:
+        """Generate an embedding vector for a user's search query."""
+        prepared = f"task: search result | query: {(text or '').strip()}"
+        logger.debug(f"Generating query embedding ({len(prepared)} chars)")
+        try:
+            payload = {
+                "content": {"parts": [{"text": prepared}]},
+                "output_dimensionality": self.output_dimensionality,
+            }
+            return self._embed(payload)
+        except Exception as e:
+            log_exception(logger, "Failed to generate query embedding", e)
+            raise
+
+    def _embed(self, payload: dict) -> List[float]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key,
+        }
+        response = requests.post(self.endpoint, headers=headers, json=payload, timeout=60)
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Gemini embedding request failed ({response.status_code}): {response.text[:500]}"
             )
-            result = model.generate_content([
-                {"mime_type": "image/jpeg", "data": image_bytes},
-                prompt,
-            ])
-            description = (result.text or "").strip()
-            logger.info(f"✓ Generated description ({len(description)} chars): {description[:100]}...")
-            return description
-        except Exception as e:
-            log_exception(logger, "Failed to generate image description", e)
-            raise
 
-    def embed_text(self, text: str) -> List[float]:
-        """
-        Generate embedding vector for text.
-        
-        Args:
-            text: Input text to embed
-            
-        Returns:
-            768-dimensional embedding vector
-            
-        Raises:
-            RuntimeError: If embedding is not found in API response
-        """
-        logger.debug(f"🧮 Generating embedding for text ({len(text)} chars): {text[:50]}...")
-        try:
-            embed = genai.embed_content(model=self.embedding_model_name, content=text)
-            if isinstance(embed, dict):
-                emb = embed.get("embedding") or embed.get("data", {}).get("embedding")
-            else:
-                emb = getattr(embed, "embedding", None)
-            if emb is None:
-                logger.error("✗ Embedding not found in API response")
-                raise RuntimeError("Embedding not found in response")
-            
-            logger.debug(f"✓ Generated embedding (dim={len(emb)})")
-            return list(emb)
-        except Exception as e:
-            log_exception(logger, "Failed to generate text embedding", e)
-            raise
+        data = response.json()
+        embedding = data.get("embedding")
+        if embedding is None:
+            embeddings = data.get("embeddings") or []
+            embedding = embeddings[0] if embeddings else None
 
+        values = embedding.get("values") if isinstance(embedding, dict) else None
+        if not values:
+            logger.error("Embedding values not found in Gemini response")
+            raise RuntimeError("Embedding not found in response")
 
+        logger.debug(f"Generated embedding (dim={len(values)})")
+        return [float(value) for value in values]

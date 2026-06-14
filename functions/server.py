@@ -74,6 +74,7 @@ class ResolveImageBody(BaseModel):
     page_url: Optional[str] = None
     album_path: Optional[str] = None
     album_title: Optional[str] = None
+    user_description: Optional[str] = None
 
 class CommitPreviewBody(BaseModel):
     preview_id: str
@@ -154,10 +155,16 @@ def create_app(config_path: str = None) -> FastAPI:
 
     cfg_path = os.environ.get("SOURCE_BRUH_CONFIG") or os.fspath(config_file)
     
+    db_cfg = cfg.get("db", {})
+    image_collection = (
+        os.environ.get("SOURCE_BRUH_IMAGE_COLLECTION")
+        or db_cfg.get("image_collection")
+        or "images"
+    )
     logger.info("🔥 Initializing Firestore database connection")
     try:
-        db = FirestoreDB(cfg["db"]["service_account_key_path"])
-        logger.info("✓ Firestore connected successfully")
+        db = FirestoreDB(cfg["db"]["service_account_key_path"], image_collection=image_collection)
+        logger.info(f"✓ Firestore connected successfully (image_collection={image_collection})")
     except Exception as e:
         logger.error(f"✗ Failed to initialize Firestore: {e}")
         raise
@@ -255,8 +262,8 @@ def create_app(config_path: str = None) -> FastAPI:
         try:
             client = GeminiClient(
                 api_key=api_key,
-                oracle_model=cfg["llm"]["oracle_model"],
                 embedding_model=cfg["llm"]["embedding_model"],
+                output_dimensionality=int(cfg.get("db", {}).get("dimension", 768)),
             )
             
             # Cache the client
@@ -367,6 +374,7 @@ def create_app(config_path: str = None) -> FastAPI:
                         "album_path": album_path,
                         "album_title": album_title,
                         "source_type": source_type,
+                        "user_description": (user_description or "").strip(),
                         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     },
                     fh,
@@ -445,7 +453,7 @@ def create_app(config_path: str = None) -> FastAPI:
         
         try:
             logger.debug(f"🧮 Generating embedding for: '{q}'")
-            emb = client.embed_text(q)
+            emb = client.embed_query(q)
             logger.debug(f"✓ Embedding generated (dim={len(emb)})")
         except Exception as e:
             log_exception(logger, "Failed to generate embedding", e)
@@ -674,13 +682,10 @@ def create_app(config_path: str = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="Gemini API key not set. Update it in Settings.")
 
         try:
-            description = client.describe_image(image_bytes)
+            embedding = client.embed_image(image_bytes, mime_type or "image/jpeg")
             user_note = (user_description or "").strip()
-            if user_note:
-                description = f"{description}\n\nUser note: {user_note}" if description else user_note
-            embedding = client.embed_text(description) if description else []
         except Exception as e:
-            log_exception(logger, "Failed to generate description/embedding", e)
+            log_exception(logger, "Failed to generate image embedding", e)
             raise HTTPException(status_code=500, detail=f"AI processing failed: {str(e)}")
 
         timestamp = datetime.datetime.now(datetime.timezone.utc)
@@ -698,8 +703,11 @@ def create_app(config_path: str = None) -> FastAPI:
                     "timestamp": timestamp,
                     "timestamp_iso": timestamp.isoformat(),
                     "sha256": sha,
-                    "description": description,
+                    "description": user_note,
                     "embedding": embedding,
+                    "embedding_kind": "image",
+                    "embedding_model": cfg["llm"]["embedding_model"],
+                    "embedding_dim": len(embedding),
                     "mime_type": mime_type,
                     "filename": filename,
                     "source_base_url": source_url,
@@ -815,7 +823,7 @@ def create_app(config_path: str = None) -> FastAPI:
             album_path=metadata.get("album_path"),
             album_title=metadata.get("album_title") or "Shared URL",
             source_type=metadata.get("source_type") or "context-menu",
-            user_description=body.user_description,
+            user_description=body.user_description or metadata.get("user_description"),
         )
         logger.info(f"Committed preview image {body.preview_id[:16]} for user {token_user_id}")
         return result
@@ -847,6 +855,7 @@ def create_app(config_path: str = None) -> FastAPI:
             album_path=body.album_path,
             album_title=body.album_title or "Shared URL",
             source_type="context-menu",
+            user_description=body.user_description,
         )
 
         email = user.get("email")
@@ -892,17 +901,16 @@ def create_app(config_path: str = None) -> FastAPI:
 
         client = get_gemini(user_id=token_user_id)
         if client is None:
-            logger.error("✗ Gemini client not available for image description")
+            logger.error("✗ Gemini client not available for image embedding")
             raise HTTPException(status_code=400, detail="Gemini API key not set. Update it in Settings.")
 
-        logger.info(f"🤖 Generating description and embedding")
+        logger.info("Generating direct image embedding")
         try:
-            description = client.describe_image(image_bytes)
-            logger.debug(f"✓ Description generated ({len(description)} chars)")
-            embedding = client.embed_text(description) if description else []
+            description = (body.user_description or "").strip()
+            embedding = client.embed_image(image_bytes, resp.headers.get("Content-Type") or "image/jpeg")
             logger.debug(f"✓ Embedding generated (dim={len(embedding)})")
         except Exception as e:
-            log_exception(logger, "Failed to generate description/embedding", e)
+            log_exception(logger, "Failed to generate image embedding", e)
             raise HTTPException(status_code=500, detail=f"AI processing failed: {str(e)}")
 
         timestamp = datetime.datetime.now(datetime.timezone.utc)
@@ -923,6 +931,9 @@ def create_app(config_path: str = None) -> FastAPI:
                     "sha256": sha,
                     "description": description,
                     "embedding": embedding,
+                    "embedding_kind": "image",
+                    "embedding_model": cfg["llm"]["embedding_model"],
+                    "embedding_dim": len(embedding),
                     "mime_type": resp.headers.get("Content-Type"),
                     "filename": filename,
                     "source_base_url": body.image_url,

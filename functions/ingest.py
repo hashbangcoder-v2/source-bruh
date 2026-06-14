@@ -124,9 +124,8 @@ def ingest_once(
     1. Loads configuration from config.yaml
     2. Authenticates with Google Photos
     3. Fetches images from configured albums
-    4. Generates descriptions using Gemini
-    5. Creates embeddings for semantic search
-    6. Stores everything in Firestore
+    4. Generates direct image embeddings using Gemini
+    5. Stores everything in Firestore
     
     Args:
         config_path: Path to config.yaml (optional, defaults to ./config.yaml)
@@ -149,18 +148,22 @@ def ingest_once(
         service_account = db_cfg.get("service_account_key_path")
         if not service_account:
             raise RuntimeError("Firestore service account key path must be configured under db.service_account_key_path")
-        db = FirestoreDB(service_account)
+        db = FirestoreDB(
+            service_account,
+            image_collection=os.environ.get("SOURCE_BRUH_IMAGE_COLLECTION")
+            or db_cfg.get("image_collection", "images"),
+        )
 
     photos_cfg = cfg.get("google_photos", {})
     if photos_client is None:
         photos_client = GooglePhotosClient(cfg=photos_cfg, db=db)
 
+    llm_cfg = cfg.get("llm", {})
     if gemini_client is None:
-        llm_cfg = cfg.get("llm", {})
         gemini_client = GeminiClient(
-            api_key_env=llm_cfg.get("api_key_env", "GOOGLE_API_KEY"),
-            oracle_model=llm_cfg.get("oracle_model", "gemini-1.5-flash-latest"),
-            embedding_model=llm_cfg.get("embedding_model", "text-embedding-004"),
+            api_key=os.environ.get(llm_cfg.get("api_key_env", "GOOGLE_API_KEY"), ""),
+            embedding_model=llm_cfg.get("embedding_model", "gemini-embedding-2"),
+            output_dimensionality=int(db_cfg.get("dimension", 768)),
         )
 
     max_size = storage_cfg.get("max_download_size", "w2048-h2048")
@@ -240,8 +243,11 @@ def ingest_once(
             with open(thumb_path, "wb") as f:
                 f.write(thumb_bytes)
 
-            description = gemini_client.describe_image(image_bytes) if gemini_client else ""
-            embedding = gemini_client.embed_text(description) if gemini_client and description else []
+            embedding = (
+                gemini_client.embed_image(image_bytes, item.get("mimeType") or "image/jpeg")
+                if gemini_client
+                else []
+            )
 
             db.upsert_media_item(
                 resolved_user_id,
@@ -258,8 +264,11 @@ def ingest_once(
                     "width": width,
                     "height": height,
                     "sha256": hashlib.sha256(image_bytes).hexdigest(),
-                    "description": description,
+                    "description": "",
                     "embedding": embedding,
+                    "embedding_kind": "image",
+                    "embedding_model": llm_cfg.get("embedding_model", "gemini-embedding-2"),
+                    "embedding_dim": len(embedding),
                     "mime_type": item.get("mimeType"),
                     "filename": filename,
                     "source_base_url": base_url,

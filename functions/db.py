@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 
 
 class FirestoreDB:
-    def __init__(self, service_account_key_path: str):
+    def __init__(self, service_account_key_path: str, image_collection: str = "images"):
         logger.info(f"🔥 Initializing Firestore database")
         logger.debug(f"Service account key: {service_account_key_path}")
         
@@ -34,10 +34,10 @@ class FirestoreDB:
         self._use_firestore = True
         self._local_users: Dict[str, Dict[str, Any]] = {}
         self._local_images: Dict[str, Dict[str, Any]] = {}
-        self._IMAGES_COLLECTION = "images"
+        self._IMAGES_COLLECTION = image_collection or "images"
 
     def _images_collection(self, user_id: str):
-        return self.db.collection('users').document(user_id).collection('images')
+        return self.db.collection('users').document(user_id).collection(self._IMAGES_COLLECTION)
 
     def _secrets_collection(self, user_id: str):
         return self.db.collection('users').document(user_id).collection('secrets')

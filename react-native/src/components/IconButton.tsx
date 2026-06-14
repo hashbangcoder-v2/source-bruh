@@ -7,15 +7,17 @@ type Props = {
   symbol: string;
   onPress: () => void;
   disabled?: boolean;
+  hitSlop?: number;
   style?: ViewStyle;
 };
 
-export function IconButton({label, symbol, onPress, disabled, style}: Props) {
+export function IconButton({label, symbol, onPress, disabled, hitSlop, style}: Props) {
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
       disabled={disabled}
+      hitSlop={hitSlop}
       onPress={onPress}
       style={({pressed}) => [
         styles.button,
