@@ -345,6 +345,7 @@ def create_app(config_path: str = None) -> FastAPI:
         album_path: Optional[str],
         album_title: Optional[str],
         source_type: str,
+        user_description: Optional[str] = None,
     ) -> Dict[str, Any]:
         os.makedirs(pending_dir, exist_ok=True)
         sha = hashlib.sha256(image_bytes).hexdigest()
@@ -642,6 +643,7 @@ def create_app(config_path: str = None) -> FastAPI:
         album_path: Optional[str],
         album_title: Optional[str],
         source_type: str,
+        user_description: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Index image bytes supplied by mobile uploads or downloaded URLs."""
         ensure_dirs(images_dir, thumbs_dir)
@@ -774,6 +776,7 @@ def create_app(config_path: str = None) -> FastAPI:
             album_path=body.album_path,
             album_title=body.album_title or "Shared URL",
             source_type="context-menu",
+            user_description=body.user_description,
         )
 
     @app.get("/images/preview/{preview_id}", name="get_preview_image")
