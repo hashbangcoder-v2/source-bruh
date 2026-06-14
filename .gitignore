@@ -41,6 +41,15 @@ functions/pydevd_plugins
 functions/apiclient
 functions/bin
 functions/gcloud-service-account.json
+**/gcloud-service-account.json
+**/*service-account*.json
+**/google-services*.json
+**/GoogleService-Info*.plist
+**/*.pem
+**/*.p12
+**/*.key
+**/*.jks
+**/*.keystore
 # Python bytecode
 functions/__pycache__/
 functions/*.md
