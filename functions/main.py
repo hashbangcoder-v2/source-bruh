@@ -1,12 +1,20 @@
 import asyncio
+import os
 
 from firebase_functions import https_fn
+from firebase_functions.params import SecretParam
 
 from server import app as fastapi_app
 
 
-@https_fn.on_request()
+GEMINI_API_KEY = SecretParam("GEMINI_API_KEY")
+
+
+@https_fn.on_request(secrets=[GEMINI_API_KEY])
 def api(req: https_fn.Request) -> https_fn.Response:
+    if GEMINI_API_KEY.value:
+        os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY.value
+
     path = req.path
     if path.startswith("/api/"):
         path = path[4:]
