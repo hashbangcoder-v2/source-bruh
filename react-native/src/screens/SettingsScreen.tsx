@@ -164,7 +164,7 @@ export function SettingsScreen({user, onBack}: Props) {
             onPress={() => chooseServer('local')}
             style={({pressed}) => [
               styles.segment,
-              useLocal && styles.segmentActive,
+              useLocal && styles.segmentLocalActive,
               pressed && styles.pressed,
             ]}>
             <Text style={[styles.segmentText, useLocal && styles.segmentTextActive]}>
@@ -177,7 +177,7 @@ export function SettingsScreen({user, onBack}: Props) {
             onPress={() => chooseServer('production')}
             style={({pressed}) => [
               styles.segment,
-              !useLocal && styles.segmentActive,
+              !useLocal && styles.segmentProductionActive,
               pressed && styles.pressed,
             ]}>
             <Text style={[styles.segmentText, !useLocal && styles.segmentTextActive]}>
@@ -194,7 +194,7 @@ export function SettingsScreen({user, onBack}: Props) {
               placeholder="http://127.0.0.1:5057"
               placeholderTextColor={colors.muted}
               style={styles.input}
-              selectionColor={colors.blue}
+              selectionColor={colors.yellow}
               autoCapitalize="none"
               autoCorrect={false}
             />
@@ -238,7 +238,7 @@ export function SettingsScreen({user, onBack}: Props) {
           placeholder={geminiSet ? 'Key saved' : 'AIza...'}
           placeholderTextColor={colors.muted}
           style={styles.input}
-          selectionColor={colors.blue}
+          selectionColor={colors.yellow}
           secureTextEntry
           autoCapitalize="none"
           autoCorrect={false}
@@ -276,14 +276,16 @@ const styles = StyleSheet.create({
   },
   back: {
     alignItems: 'center',
-    backgroundColor: colors.blue,
+    backgroundColor: colors.panel,
+    borderColor: colors.line,
+    borderWidth: 1,
     borderRadius: 8,
     minHeight: 42,
     justifyContent: 'center',
     paddingHorizontal: 14,
   },
   backText: {
-    color: colors.paper,
+    color: colors.ink,
     fontSize: 14,
     fontWeight: '800',
   },
@@ -310,7 +312,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   serverUrl: {
-    color: colors.blue,
+    color: colors.muted,
     fontSize: 12,
     marginTop: 4,
   },
@@ -343,7 +345,10 @@ const styles = StyleSheet.create({
     minHeight: 42,
     justifyContent: 'center',
   },
-  segmentActive: {
+  segmentLocalActive: {
+    backgroundColor: colors.yellow,
+  },
+  segmentProductionActive: {
     backgroundColor: colors.green,
   },
   segmentText: {
@@ -356,7 +361,7 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     alignItems: 'center',
-    backgroundColor: colors.blue,
+    backgroundColor: colors.ink,
     borderRadius: 8,
     minHeight: 46,
     justifyContent: 'center',
@@ -369,7 +374,7 @@ const styles = StyleSheet.create({
   secondaryButton: {
     alignItems: 'center',
     backgroundColor: colors.panel,
-    borderColor: colors.blue,
+    borderColor: colors.line,
     borderRadius: 8,
     borderWidth: 1,
     minHeight: 42,
@@ -377,7 +382,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   secondaryText: {
-    color: colors.blue,
+    color: colors.ink,
     fontSize: 14,
     fontWeight: '700',
   },

@@ -4,6 +4,7 @@ import {getServerBaseUrl} from './storage';
 import {
   addImageFromUrl,
   commitImagePreview,
+  CropRect,
   resolveImageFromUrl,
 } from './api';
 
@@ -136,12 +137,14 @@ export async function prepareSharedImage(image: SharedImage): Promise<PreparedSh
 export async function uploadSharedImage(
   image: SharedImage | PreparedSharedImage,
   userDescription = '',
+  cropRect?: CropRect | null,
 ) {
   if ('previewId' in image && image.previewId) {
     console.info(`[share] POST /images/commit-preview ${image.previewId}`);
     return commitImagePreview({
       previewId: image.previewId,
       userDescription,
+      cropRect,
     });
   }
 
@@ -172,6 +175,12 @@ export async function uploadSharedImage(
   form.append('album_title', image.fileName || 'Android share');
   form.append('album_path', 'android-share');
   form.append('user_description', userDescription);
+  if (cropRect) {
+    form.append('crop_x', String(cropRect.x));
+    form.append('crop_y', String(cropRect.y));
+    form.append('crop_width', String(cropRect.width));
+    form.append('crop_height', String(cropRect.height));
+  }
 
   console.info(
     `[share] POST ${serverBaseUrl}/images/upload ${image.mimeType || 'image/jpeg'}`,

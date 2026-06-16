@@ -3,6 +3,7 @@ import {SafeAreaView, StatusBar, StyleSheet} from 'react-native';
 import {FirebaseAuthTypes} from '@react-native-firebase/auth';
 import {colors} from './theme/colors';
 import {onAuthChanged, signInWithGoogle} from './services/auth';
+import {CropRect} from './services/api';
 import {
   PreparedSharedImage,
   SharedImage,
@@ -89,7 +90,10 @@ export default function App() {
     }
   };
 
-  const handleSubmitShare = async (description: string) => {
+  const handleSubmitShare = async (
+    description: string,
+    cropRect?: CropRect | null,
+  ) => {
     if (!pendingShare) {
       return;
     }
@@ -97,7 +101,7 @@ export default function App() {
     setShareStatus('Indexing shared image...');
     setShareError('');
     try {
-      await uploadSharedImage(pendingShare, description);
+      await uploadSharedImage(pendingShare, description, cropRect);
       setPendingShare(null);
       setShareStatus('Shared image indexed.');
       setScreen('query');

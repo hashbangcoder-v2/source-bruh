@@ -22,12 +22,14 @@ def test_settings_returns_user_info(monkeypatch):
             "embedding_model": "gemini-embedding-2",
         },
         "db": {"service_account_key_path": "dummy", "dimension": 768, "image_collection": "images_test"},
+        "storage": {"bucket_name": "test-bucket"},
     }
 
     class DummyFirestoreDB:
-        def __init__(self, service_account_path, image_collection="images"):
+        def __init__(self, service_account_path, image_collection="images", storage_bucket=None):
             self.service_account_path = service_account_path
             self.image_collection = image_collection
+            self.storage_bucket = storage_bucket
 
         def get_user_settings(self, uid):
             return {"album_url": "https://example.com/album", "gemini_api_key": "secret"}
@@ -67,6 +69,7 @@ def test_settings_returns_user_info(monkeypatch):
         assert response.status_code == 200
         assert response.json() == {
             "email": "user@example.com",
+            "name": "",
             "album_url": "https://example.com/album",
             "gemini_key_set": True,
         }

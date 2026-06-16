@@ -12,8 +12,16 @@ export type SearchResult = {
 
 export type SettingsResponse = {
   email: string;
+  name: string;
   album_url: string;
   gemini_key_set: boolean;
+};
+
+export type CropRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 
 export type ResolvedImagePreview = {
@@ -132,6 +140,7 @@ export async function resolveImageFromUrl(params: {
 export async function commitImagePreview(params: {
   previewId: string;
   userDescription?: string;
+  cropRect?: CropRect | null;
 }) {
   return makeAuthenticatedRequest<{ok: boolean; media_id: string}>(
     '/images/commit-preview',
@@ -140,6 +149,10 @@ export async function commitImagePreview(params: {
       body: JSON.stringify({
         preview_id: params.previewId,
         user_description: params.userDescription || '',
+        crop_x: params.cropRect?.x,
+        crop_y: params.cropRect?.y,
+        crop_width: params.cropRect?.width,
+        crop_height: params.cropRect?.height,
       }),
     },
   );

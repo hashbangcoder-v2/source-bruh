@@ -59,6 +59,7 @@ class SearchResponseItem(BaseModel):
 
 class SettingsResponse(BaseModel):
     email: str
+    name: str = ""
     album_url: str
     gemini_key_set: bool
 
@@ -79,6 +80,10 @@ class ResolveImageBody(BaseModel):
 class CommitPreviewBody(BaseModel):
     preview_id: str
     user_description: Optional[str] = None
+    crop_x: Optional[float] = None
+    crop_y: Optional[float] = None
+    crop_width: Optional[float] = None
+    crop_height: Optional[float] = None
 
 
 class PreviewImageParser(HTMLParser):
@@ -154,7 +159,13 @@ def create_app(config_path: str = None) -> FastAPI:
     )
 
     cfg_path = os.environ.get("SOURCE_BRUH_CONFIG") or os.fspath(config_file)
-    
+    storage_cfg = cfg.get("storage", {})
+    storage_bucket = (
+        os.environ.get("SOURCE_BRUH_STORAGE_BUCKET")
+        or storage_cfg.get("bucket_name")
+        or storage_cfg.get("bucket")
+    )
+
     db_cfg = cfg.get("db", {})
     image_collection = (
         os.environ.get("SOURCE_BRUH_IMAGE_COLLECTION")
@@ -163,7 +174,11 @@ def create_app(config_path: str = None) -> FastAPI:
     )
     logger.info("🔥 Initializing Firestore database connection")
     try:
-        db = FirestoreDB(cfg["db"]["service_account_key_path"], image_collection=image_collection)
+        db = FirestoreDB(
+            cfg["db"]["service_account_key_path"],
+            image_collection=image_collection,
+            storage_bucket=storage_bucket,
+        )
         logger.info(f"✓ Firestore connected successfully (image_collection={image_collection})")
     except Exception as e:
         logger.error(f"✗ Failed to initialize Firestore: {e}")
@@ -182,7 +197,6 @@ def create_app(config_path: str = None) -> FastAPI:
     # Global fallback client (for shared/admin API key from secrets)
     global_gemini_client: GeminiClient | None = None
     
-    storage_cfg = cfg.get("storage", {})
     images_dir = storage_cfg.get("images_dir", "data/images")
     thumbs_dir = storage_cfg.get("thumbs_dir", "data/thumbs")
     pending_dir = storage_cfg.get("pending_dir", "data/pending")
@@ -203,7 +217,69 @@ def create_app(config_path: str = None) -> FastAPI:
         if api_key:
             logger.debug("✓ Found API key in environment (from Firebase Secrets)")
         return api_key
-    
+
+    def user_info_from_token(user: dict) -> Dict[str, str]:
+        email = str(user.get("email") or "")
+        name = str(
+            user.get("name")
+            or user.get("displayName")
+            or user.get("display_name")
+            or ""
+        )
+        photo_url = str(user.get("picture") or user.get("photoURL") or "")
+        return {
+            key: value
+            for key, value in {
+                "email": email,
+                "name": name,
+                "display_name": name,
+                "photo_url": photo_url,
+            }.items()
+            if value
+        }
+
+    def persist_user_info(user: dict) -> None:
+        uid = user.get("uid")
+        if not uid or not hasattr(db, "save_user_info"):
+            return
+        info = user_info_from_token(user)
+        if info:
+            db.save_user_info(uid, info)
+
+    def crop_image_bytes(
+        image_bytes: bytes,
+        mime_type: Optional[str],
+        crop_rect: Optional[Dict[str, float]],
+    ) -> tuple[bytes, str]:
+        if not crop_rect:
+            return image_bytes, mime_type or "image/jpeg"
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                width, height = img.size
+                x = max(0.0, min(1.0, float(crop_rect.get("x", 0))))
+                y = max(0.0, min(1.0, float(crop_rect.get("y", 0))))
+                crop_width = max(0.0, min(1.0 - x, float(crop_rect.get("width", 1))))
+                crop_height = max(0.0, min(1.0 - y, float(crop_rect.get("height", 1))))
+                if crop_width <= 0.02 or crop_height <= 0.02:
+                    return image_bytes, mime_type or "image/jpeg"
+                box = (
+                    round(x * width),
+                    round(y * height),
+                    round((x + crop_width) * width),
+                    round((y + crop_height) * height),
+                )
+                cropped = img.crop(box)
+                out = io.BytesIO()
+                normalized_mime = (mime_type or "image/jpeg").split(";", 1)[0].lower()
+                if normalized_mime == "image/png":
+                    cropped.save(out, format="PNG")
+                    return out.getvalue(), "image/png"
+                cropped.convert("RGB").save(out, format="JPEG", quality=95)
+                return out.getvalue(), "image/jpeg"
+        except Exception as e:
+            logger.warning(f"Could not crop image, using original: {e}")
+            return image_bytes, mime_type or "image/jpeg"
+
     def get_gemini(user_id: Optional[str] = None) -> GeminiClient | None:
         """
         Get or create Gemini client for the specified user.
@@ -549,14 +625,18 @@ def create_app(config_path: str = None) -> FastAPI:
                 stored_user = {}
             
             email = str(user.get("email") or stored_user.get("email") or "")
-            if email and stored_user.get("email") != email and hasattr(db, "save_user_info"):
-                logger.debug(f"Updating email for user {uid}")
-                db.save_user_info(uid, {"email": email})
+            token_user = user_info_from_token(user)
+            merged_user = {**stored_user, **token_user}
+            name = str(merged_user.get("name") or merged_user.get("display_name") or "")
+            if token_user and token_user.items() - stored_user.items():
+                logger.debug(f"Updating profile info for user {uid}")
+                db.save_user_info(uid, merged_user)
 
             logger.info(f"✓ Settings retrieved for {email} (album_url={'set' if album_url else 'not set'}, gemini_key={'set' if gemini_key_set else 'not set'})")
             
             return SettingsResponse(
                 email=email,
+                name=name,
                 album_url=album_url,
                 gemini_key_set=gemini_key_set,
             )
@@ -604,9 +684,7 @@ def create_app(config_path: str = None) -> FastAPI:
         if hasattr(db, "save_user_settings"):
             db.save_user_settings(user_id, existing)
 
-        email = user.get("email")
-        if email and hasattr(db, "save_user_info"):
-            db.save_user_info(user_id, {"email": email})
+        persist_user_info(user)
 
         return {"ok": True, "album_url": normalized}
 
@@ -635,9 +713,7 @@ def create_app(config_path: str = None) -> FastAPI:
         if hasattr(db, "save_user_settings"):
             db.save_user_settings(user_id, existing)
 
-        email = user.get("email")
-        if email and hasattr(db, "save_user_info"):
-            db.save_user_info(user_id, {"email": email})
+        persist_user_info(user)
 
         return {"ok": True}
 
@@ -652,23 +728,30 @@ def create_app(config_path: str = None) -> FastAPI:
         album_title: Optional[str],
         source_type: str,
         user_description: Optional[str] = None,
+        crop_rect: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         """Index image bytes supplied by mobile uploads or downloaded URLs."""
-        ensure_dirs(images_dir, thumbs_dir)
+        image_bytes, mime_type = crop_image_bytes(image_bytes, mime_type, crop_rect)
         sha = hashlib.sha256(image_bytes).hexdigest()
         filename = f"{source_type}-{sha[:16]}.jpg"
-        file_path = os.path.join(images_dir, filename)
-        thumb_path = os.path.join(thumbs_dir, filename)
 
         try:
-            with open(file_path, "wb") as fh:
-                fh.write(image_bytes)
             thumb_bytes = create_thumbnail(image_bytes)
-            with open(thumb_path, "wb") as fh:
-                fh.write(thumb_bytes)
         except Exception as e:
-            log_exception(logger, "Failed to save image files", e)
-            raise HTTPException(status_code=500, detail=f"Failed to save image: {str(e)}")
+            log_exception(logger, "Failed to create image thumbnail", e)
+            raise HTTPException(status_code=500, detail=f"Failed to prepare image: {str(e)}")
+
+        try:
+            storage_refs = db.store_image_blobs(
+                token_user_id,
+                sha,
+                image_bytes,
+                thumb_bytes,
+                mime_type or "image/jpeg",
+            )
+        except Exception as e:
+            log_exception(logger, "Failed to upload image to Cloud Storage", e)
+            raise HTTPException(status_code=500, detail=f"Storage upload failed: {str(e)}")
 
         width = height = None
         try:
@@ -695,13 +778,11 @@ def create_app(config_path: str = None) -> FastAPI:
                 token_user_id,
                 sha,
                 {
-                    "google_media_id": sha,
-                    "album_title": album_title,
-                    "album_path": album_path,
-                    "file_path": file_path,
-                    "thumb_path": thumb_path,
+                    "image_id": sha,
                     "timestamp": timestamp,
                     "timestamp_iso": timestamp.isoformat(),
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
                     "sha256": sha,
                     "description": user_note,
                     "embedding": embedding,
@@ -710,14 +791,13 @@ def create_app(config_path: str = None) -> FastAPI:
                     "embedding_dim": len(embedding),
                     "mime_type": mime_type,
                     "filename": filename,
-                    "source_base_url": source_url,
-                    "image_bytes": image_bytes,
-                    "thumbnail_bytes": thumb_bytes,
+                    "source_url": source_url,
+                    "source_page_url": page_url,
+                    **storage_refs,
                     "width": width,
                     "height": height,
                     "manual_entry": True,
                     "source_type": source_type,
-                    "source_page_url": page_url,
                     "user_description": (user_description or "").strip(),
                 },
             )
@@ -725,7 +805,7 @@ def create_app(config_path: str = None) -> FastAPI:
             log_exception(logger, "Failed to store image in database", e)
             raise HTTPException(status_code=500, detail=f"Database storage failed: {str(e)}")
 
-        return {"ok": True, "media_id": sha}
+        return {"ok": True, "media_id": sha, **storage_refs}
 
     @app.post("/images/upload")
     async def upload_image(
@@ -734,6 +814,10 @@ def create_app(config_path: str = None) -> FastAPI:
         album_path: str = Form("android-share"),
         album_title: str = Form("Android share"),
         user_description: str = Form(""),
+        crop_x: Optional[float] = Form(None),
+        crop_y: Optional[float] = Form(None),
+        crop_width: Optional[float] = Form(None),
+        crop_height: Optional[float] = Form(None),
         user: dict = Depends(get_current_user),
     ):
         """Index an image uploaded directly from the Android sharesheet."""
@@ -745,9 +829,7 @@ def create_app(config_path: str = None) -> FastAPI:
         if not image_bytes:
             raise HTTPException(status_code=400, detail="Uploaded image was empty")
 
-        email = user.get("email")
-        if email and hasattr(db, "save_user_info"):
-            db.save_user_info(token_user_id, {"email": email})
+        persist_user_info(user)
 
         return index_image_bytes(
             token_user_id=token_user_id,
@@ -759,6 +841,12 @@ def create_app(config_path: str = None) -> FastAPI:
             album_title=album_title or file.filename,
             source_type="android-share",
             user_description=user_description,
+            crop_rect={
+                "x": crop_x,
+                "y": crop_y,
+                "width": crop_width,
+                "height": crop_height,
+            } if None not in (crop_x, crop_y, crop_width, crop_height) else None,
         )
 
     @app.post("/images/resolve-url")
@@ -824,6 +912,12 @@ def create_app(config_path: str = None) -> FastAPI:
             album_title=metadata.get("album_title") or "Shared URL",
             source_type=metadata.get("source_type") or "context-menu",
             user_description=body.user_description or metadata.get("user_description"),
+            crop_rect={
+                "x": body.crop_x,
+                "y": body.crop_y,
+                "width": body.crop_width,
+                "height": body.crop_height,
+            } if None not in (body.crop_x, body.crop_y, body.crop_width, body.crop_height) else None,
         )
         logger.info(f"Committed preview image {body.preview_id[:16]} for user {token_user_id}")
         return result
@@ -840,9 +934,7 @@ def create_app(config_path: str = None) -> FastAPI:
             logger.warning("✗ Missing image URL")
             raise HTTPException(status_code=400, detail="Missing image URL")
 
-        email = user.get("email")
-        if email and hasattr(db, "save_user_info"):
-            db.save_user_info(token_user_id, {"email": email})
+        persist_user_info(user)
 
         image_bytes, mime_type, resolved_image_url = download_shared_image(body.image_url)
         logger.info(f"Downloaded shared image ({len(image_bytes)} bytes) from {resolved_image_url}")
@@ -858,9 +950,7 @@ def create_app(config_path: str = None) -> FastAPI:
             user_description=body.user_description,
         )
 
-        email = user.get("email")
-        if email and hasattr(db, "save_user_info"):
-            db.save_user_info(token_user_id, {"email": email})
+        persist_user_info(user)
 
         logger.debug(f"🌐 Downloading image from: {body.image_url}")
         try:

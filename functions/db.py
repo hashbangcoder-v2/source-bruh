@@ -5,7 +5,7 @@ import os
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, storage
 from google.oauth2.credentials import Credentials
 from logger_config import get_logger, log_exception
 
@@ -13,14 +13,20 @@ logger = get_logger(__name__)
 
 
 class FirestoreDB:
-    def __init__(self, service_account_key_path: str, image_collection: str = "images"):
+    def __init__(
+        self,
+        service_account_key_path: str,
+        image_collection: str = "images",
+        storage_bucket: Optional[str] = None,
+    ):
         logger.info(f"🔥 Initializing Firestore database")
         logger.debug(f"Service account key: {service_account_key_path}")
         
         try:
             if not firebase_admin._apps:
                 cred = credentials.Certificate(service_account_key_path)
-                firebase_admin.initialize_app(cred)
+                options = {"storageBucket": storage_bucket} if storage_bucket else None
+                firebase_admin.initialize_app(cred, options)
                 logger.debug("✓ Firebase Admin SDK initialized")
             else:
                 logger.debug("Firebase Admin SDK already initialized")
@@ -35,6 +41,7 @@ class FirestoreDB:
         self._local_users: Dict[str, Dict[str, Any]] = {}
         self._local_images: Dict[str, Dict[str, Any]] = {}
         self._IMAGES_COLLECTION = image_collection or "images"
+        self._storage_bucket = storage_bucket
 
     def _images_collection(self, user_id: str):
         return self.db.collection('users').document(user_id).collection(self._IMAGES_COLLECTION)
@@ -43,7 +50,7 @@ class FirestoreDB:
         return self.db.collection('users').document(user_id).collection('secrets')
 
     def add_image_data(self, user_id: str, image_data: Dict[str, Any]):
-        media_id = image_data.get('google_media_id')
+        media_id = image_data.get('image_id') or image_data.get('google_media_id')
         if media_id:
             self.upsert_media_item(user_id, media_id, image_data)
             return
@@ -56,10 +63,40 @@ class FirestoreDB:
 
     def upsert_media_item(self, user_id: str, media_id: str, image_data: Dict[str, Any]) -> str:
         payload = dict(image_data)
-        payload['google_media_id'] = media_id
+        payload.setdefault('image_id', media_id)
         doc_ref = self._images_collection(user_id).document(media_id)
-        doc_ref.set(payload, merge=True)
+        doc_ref.set(payload)
         return doc_ref.id
+
+    def store_image_blobs(
+        self,
+        user_id: str,
+        image_id: str,
+        image_bytes: bytes,
+        thumbnail_bytes: bytes,
+        mime_type: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Upload original and thumbnail bytes to Cloud Storage for Firebase."""
+
+        bucket = storage.bucket(self._storage_bucket) if self._storage_bucket else storage.bucket()
+        original_path = f"users/{user_id}/images/{image_id}/original"
+        thumb_path = f"users/{user_id}/images/{image_id}/thumb.jpg"
+
+        bucket.blob(original_path).upload_from_string(
+            image_bytes,
+            content_type=mime_type or "image/jpeg",
+        )
+        bucket.blob(thumb_path).upload_from_string(
+            thumbnail_bytes,
+            content_type="image/jpeg",
+        )
+
+        return {
+            "storage_bucket": bucket.name,
+            "storage_path": original_path,
+            "original_storage_path": original_path,
+            "thumb_storage_path": thumb_path,
+        }
 
     def get_latest_media_timestamp(self, user_id: str, album_title: Optional[str] = None) -> Optional[datetime.datetime]:
         collection = self._images_collection(user_id)
@@ -156,6 +193,16 @@ class FirestoreDB:
             return None, None
 
         mime_type = doc.get("mime_type", "image/jpeg")
+        storage_path = doc.get("thumb_storage_path") if prefer_thumb else (
+            doc.get("original_storage_path") or doc.get("storage_path")
+        )
+        if storage_path:
+            bucket_name = doc.get("storage_bucket") or self._storage_bucket
+            bucket = storage.bucket(bucket_name) if bucket_name else storage.bucket()
+            blob = bucket.blob(storage_path)
+            content_type = blob.content_type or ("image/jpeg" if prefer_thumb else mime_type)
+            return blob.download_as_bytes(), content_type
+
         blob_key = "thumb_bytes" if prefer_thumb else "image_bytes"
         blob = doc.get(blob_key)
 
@@ -311,6 +358,17 @@ class FirestoreDB:
             if doc.exists:
                 data = doc.to_dict() or {}
                 data.setdefault("image_rowid", key)
+                return data
+
+            matches = (
+                self.db.collection_group(self._IMAGES_COLLECTION)
+                .where("image_id", "==", key)
+                .limit(1)
+                .stream()
+            )
+            for match in matches:
+                data = match.to_dict() or {}
+                data.setdefault("image_rowid", match.id)
                 return data
 
             matches = (
