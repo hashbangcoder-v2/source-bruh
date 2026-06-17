@@ -53,15 +53,29 @@ class SearchResponseItem(BaseModel):
     image_rowid: str
     distance: float
     description: Optional[str]
+    user_description: Optional[str] = None
     album_title: Optional[str]
     timestamp: Optional[str]
     thumb_url: str
+    image_url: str
+    source_url: Optional[str] = None
 
 class SettingsResponse(BaseModel):
     email: str
     name: str = ""
     album_url: str
     gemini_key_set: bool
+
+class ProfileStatsResponse(BaseModel):
+    files_indexed: int = 0
+    queries_last_week: int = 0
+    queries_lifetime: int = 0
+
+class ProfileResponse(BaseModel):
+    email: str
+    name: str = ""
+    photo_url: str = ""
+    stats: ProfileStatsResponse
 
 class AddImageBody(BaseModel):
     image_url: str
@@ -116,6 +130,58 @@ def _normalize_album_path(value: Optional[str]) -> str:
         path = parsed.path.strip("/")
         return path
     return raw.strip("/")
+
+
+def _serialize_timestamp(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        return value.isoformat()
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)
+
+
+def _infer_time_period_year(row: Dict[str, Any]) -> Optional[int]:
+    values = [
+        row.get("title"),
+        row.get("filename"),
+        row.get("description"),
+        row.get("user_description"),
+        row.get("album_title"),
+        row.get("source_url"),
+        row.get("source_page_url"),
+    ]
+    text = " ".join(str(value) for value in values if value)
+    if not text:
+        return None
+    years = [
+        int(match)
+        for match in re.findall(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)", text)
+    ]
+    return max(years) if years else None
+
+
+def _rerank_search_rows(rows: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
+    if not rows:
+        return []
+
+    best_distance = min(float(row.get("distance", 1.0)) for row in rows)
+
+    def sort_key(row: Dict[str, Any]) -> tuple[int, int, float]:
+        distance = float(row.get("distance", 1.0))
+        # Keep semantic quality primary, then prefer newer explicit time periods
+        # among near-neighbor matches.
+        relevance_bucket = max(0, int((distance - best_distance) / 0.03))
+        inferred_year = _infer_time_period_year(row) or 0
+        return relevance_bucket, -inferred_year, distance
+
+    return sorted(rows, key=sort_key)[:top_k]
 
 
 def create_app(config_path: str = None) -> FastAPI:
@@ -537,43 +603,63 @@ def create_app(config_path: str = None) -> FastAPI:
         
         try:
             logger.debug(f"🗄️  Searching database (top_k={top_k})")
-            rows = db.search(emb, top_k=top_k, user_id=user_id)
+            rows = db.search(emb, top_k=max(top_k, min(100, top_k * 5)), user_id=user_id)
             logger.info(f"✓ Found {len(rows)} results")
         except Exception as e:
             log_exception(logger, "Database search failed", e)
             raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
         
         results: List[SearchResponseItem] = []
+        rows = _rerank_search_rows(rows, top_k)
+        image_query = urllib.parse.urlencode({"user_id": user_id}) if user_id else ""
+        thumb_query = urllib.parse.urlencode({"thumb": 1, "user_id": user_id}) if user_id else "thumb=1"
         for r in rows:
             image_id = str(r.get("image_rowid"))
+            image_path = str(app.url_path_for("get_image", image_rowid=image_id))
             thumb_url = r.get("thumb_url") or ""
             if not thumb_url:
-                if r.get("thumb_path") or r.get("thumb_bytes"):
-                    thumb_url = app.url_path_for("get_image", image_rowid=image_id) + "?thumb=1"
+                if r.get("thumb_path") or r.get("thumb_bytes") or r.get("thumb_storage_path"):
+                    thumb_url = f"{image_path}?{thumb_query}"
                 elif r.get("image_url"):
                     thumb_url = str(r["image_url"])
+                elif r.get("original_storage_path") or r.get("storage_path"):
+                    thumb_url = f"{image_path}?{thumb_query}"
+            image_url = f"{image_path}?{image_query}" if image_query else image_path
             results.append(
                 SearchResponseItem(
                     image_rowid=image_id,
                     distance=float(r["distance"]),
                     description=r.get("description"),
+                    user_description=r.get("user_description"),
                     album_title=r.get("album_title"),
-                    timestamp=r.get("timestamp"),
+                    timestamp=_serialize_timestamp(r.get("timestamp")),
                     thumb_url=thumb_url,
+                    image_url=image_url,
+                    source_url=r.get("source_url") or r.get("source_page_url"),
                 )
             )
         
         logger.info(f"✓ Returning {len(results)} search results")
+        if user_id and hasattr(db, "record_query_event"):
+            try:
+                db.record_query_event(user_id, q, top_k, len(results))
+            except Exception as stats_error:
+                logger.warning(f"Could not record query stats for {user_id}: {stats_error}")
+
         return results
 
     @app.get("/image/{image_rowid}")
-    def get_image(image_rowid: str, thumb: int = 0):
+    def get_image(image_rowid: str, thumb: int = 0, user_id: Optional[str] = None):
         """Retrieve image or thumbnail by ID."""
         img_type = "thumbnail" if thumb == 1 else "full image"
         logger.debug(f"🖼️  Retrieving {img_type}: {image_rowid}")
         
         try:
-            blob, mime_type = db.get_image_blob(image_rowid, prefer_thumb=thumb == 1)
+            blob, mime_type = db.get_image_blob(
+                image_rowid,
+                prefer_thumb=thumb == 1,
+                user_id=user_id,
+            )
             if blob is None:
                 logger.warning(f"✗ Image not found: {image_rowid}")
                 raise HTTPException(status_code=404, detail="Image not found")
@@ -644,6 +730,33 @@ def create_app(config_path: str = None) -> FastAPI:
             log_exception(logger, "Failed to fetch settings", e)
             raise HTTPException(status_code=500, detail=f"Settings retrieval failed: {str(e)}")
 
+
+    @app.get("/profile", response_model=ProfileResponse)
+    async def get_profile(user: dict = Depends(get_current_user)):
+        uid = user["uid"]
+        logger.info(f"Fetching profile for user: {uid}")
+
+        try:
+            persist_user_info(user)
+            stored_user = db.get_user_info(uid) if hasattr(db, "get_user_info") else {}
+            if not isinstance(stored_user, dict):
+                stored_user = {}
+            token_user = user_info_from_token(user)
+            merged_user = {**stored_user, **token_user}
+            stats = db.get_profile_stats(uid) if hasattr(db, "get_profile_stats") else {}
+            return ProfileResponse(
+                email=str(merged_user.get("email") or ""),
+                name=str(merged_user.get("name") or merged_user.get("display_name") or ""),
+                photo_url=str(merged_user.get("photo_url") or ""),
+                stats=ProfileStatsResponse(
+                    files_indexed=int(stats.get("files_indexed", 0)),
+                    queries_last_week=int(stats.get("queries_last_week", 0)),
+                    queries_lifetime=int(stats.get("queries_lifetime", 0)),
+                ),
+            )
+        except Exception as e:
+            log_exception(logger, "Failed to fetch profile", e)
+            raise HTTPException(status_code=500, detail=f"Profile retrieval failed: {str(e)}")
 
     class UpdateAlbumsBody(BaseModel):
         albums: List[str]

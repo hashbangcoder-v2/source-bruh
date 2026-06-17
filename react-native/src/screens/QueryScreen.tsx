@@ -4,6 +4,7 @@ import {
   FlatList,
   Image,
   Modal,
+  PanResponder,
   Pressable,
   StyleSheet,
   Text,
@@ -11,12 +12,15 @@ import {
   View,
 } from 'react-native';
 import {IconButton} from '../components/IconButton';
+import {BackIconButton} from '../components/BackIconButton';
 import {StatusText} from '../components/StatusText';
 import {SearchResult, getImageUrl, searchImages} from '../services/api';
+import {copyImageToClipboard} from '../services/imageClipboard';
 import {colors} from '../theme/colors';
 
 type Props = {
   onSettings: () => void;
+  onProfile: () => void;
   shareStatus?: string;
   shareError?: string;
 };
@@ -32,26 +36,36 @@ function ResultTile({item, onPress}: TileProps) {
 
   React.useEffect(() => {
     let mounted = true;
+    let settled = false;
+    const path = item.thumb_url || item.image_url || `/image/${item.image_rowid}`;
+    setUri(null);
+    setFailed(false);
     const timeout = setTimeout(() => {
-      if (mounted && !uri) {
+      if (mounted && !settled) {
         setFailed(true);
       }
     }, 5000);
 
-    getImageUrl(item.thumb_url)
+    getImageUrl(path)
       .then(value => {
+        settled = true;
         if (mounted) {
           setUri(value);
         }
       })
-      .catch(() => setFailed(true))
+      .catch(() => {
+        settled = true;
+        if (mounted) {
+          setFailed(true);
+        }
+      })
       .finally(() => clearTimeout(timeout));
 
     return () => {
       mounted = false;
       clearTimeout(timeout);
     };
-  }, [item.thumb_url, uri]);
+  }, [item.image_rowid, item.image_url, item.thumb_url]);
 
   return (
     <Pressable onPress={onPress} style={styles.tile}>
@@ -70,12 +84,76 @@ function ResultTile({item, onPress}: TileProps) {
   );
 }
 
-export function QueryScreen({onSettings, shareStatus, shareError}: Props) {
+function ProfileIconButton({onPress}: {onPress: () => void}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Profile"
+      hitSlop={10}
+      onPress={onPress}
+      style={({pressed}) => [styles.profileButton, pressed && styles.pressedButton]}>
+      <View style={styles.profileIconHead} />
+      <View style={styles.profileIconBody} />
+    </Pressable>
+  );
+}
+
+function SearchIconButton({
+  disabled,
+  onPress,
+}: {
+  label?: string;
+  symbol?: string;
+  disabled?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Search"
+      disabled={disabled}
+      onPress={onPress}
+      style={({pressed}) => [
+        styles.searchButton,
+        pressed && styles.pressedButton,
+        disabled && styles.disabledButton,
+      ]}>
+      <View style={styles.searchIconCircle} />
+      <View style={styles.searchIconHandle} />
+    </Pressable>
+  );
+}
+
+function ordinal(day: number) {
+  if (day > 10 && day < 20) {
+    return `${day}th`;
+  }
+  const suffix = day % 10 === 1 ? 'st' : day % 10 === 2 ? 'nd' : day % 10 === 3 ? 'rd' : 'th';
+  return `${day}${suffix}`;
+}
+
+function formatDisplayDate(value?: string | null) {
+  if (!value) {
+    return '';
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  const month = parsed.toLocaleString('en-US', {month: 'short'});
+  return `${ordinal(parsed.getDate())} ${month} ${parsed.getFullYear()}`;
+}
+
+function getSourceLabel(item: SearchResult) {
+  return item.source_url || item.album_title || item.image_rowid;
+}
+
+export function QueryScreen({onSettings, onProfile, shareStatus, shareError}: Props) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [selected, setSelected] = useState<SearchResult | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [pageSize, setPageSize] = useState(30);
 
   const runSearch = async (nextPageSize = pageSize) => {
@@ -107,6 +185,7 @@ export function QueryScreen({onSettings, shareStatus, shareError}: Props) {
 
   return (
     <View style={styles.container}>
+      <ProfileIconButton onPress={onProfile} />
       <IconButton
         label="Settings"
         symbol="⚙"
@@ -133,7 +212,7 @@ export function QueryScreen({onSettings, shareStatus, shareError}: Props) {
             autoCapitalize="none"
             returnKeyType="search"
           />
-          <IconButton
+          <SearchIconButton
             label="Search"
             symbol="⌕"
             disabled={!query.trim() || loading}
@@ -156,8 +235,8 @@ export function QueryScreen({onSettings, shareStatus, shareError}: Props) {
           keyExtractor={item => item.image_rowid}
           numColumns={3}
           contentContainerStyle={styles.grid}
-          renderItem={({item}) => (
-            <ResultTile item={item} onPress={() => setSelected(item)} />
+          renderItem={({item, index}) => (
+            <ResultTile item={item} onPress={() => setSelectedIndex(index)} />
           )}
           onEndReached={loadMore}
           onEndReachedThreshold={0.8}
@@ -169,39 +248,156 @@ export function QueryScreen({onSettings, shareStatus, shareError}: Props) {
         />
       ) : null}
 
-      <Modal visible={Boolean(selected)} transparent animationType="fade">
-        <View style={styles.modalShade}>
-          <View style={styles.modalPanel}>
-            <Pressable onPress={() => setSelected(null)} style={styles.close}>
-              <Text style={styles.closeText}>x</Text>
-            </Pressable>
-            {selected ? (
-              <>
-                <ResultPreview item={selected} />
-                <Text style={styles.modalTitle}>
-                  {selected.album_title || 'Shared image'}
-                </Text>
-                <Text style={styles.description}>
-                  {selected.description || 'No description available.'}
-                </Text>
-                {selected.timestamp ? (
-                  <Text style={styles.meta}>{selected.timestamp}</Text>
-                ) : null}
-              </>
-            ) : null}
-          </View>
-        </View>
-      </Modal>
+      <ResultDetailModal
+        index={selectedIndex}
+        results={results}
+        onClose={() => setSelectedIndex(null)}
+        onSelectIndex={setSelectedIndex}
+      />
     </View>
   );
 }
 
-function ResultPreview({item}: {item: SearchResult}) {
+function ResultDetailModal({
+  index,
+  results,
+  onClose,
+  onSelectIndex,
+}: {
+  index: number | null;
+  results: SearchResult[];
+  onClose: () => void;
+  onSelectIndex: (index: number) => void;
+}) {
+  const item = index === null ? null : results[index] || null;
   const [uri, setUri] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState('');
+  const [failed, setFailed] = useState(false);
+  const canGoPrevious = index !== null && index > 0;
+  const canGoNext = index !== null && index < results.length - 1;
+
+  const goPrevious = React.useCallback(() => {
+    if (canGoPrevious && index !== null) {
+      onSelectIndex(index - 1);
+    }
+  }, [canGoPrevious, index, onSelectIndex]);
+
+  const goNext = React.useCallback(() => {
+    if (canGoNext && index !== null) {
+      onSelectIndex(index + 1);
+    }
+  }, [canGoNext, index, onSelectIndex]);
+
+  const panResponder = React.useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) =>
+          Math.abs(gestureState.dx) > 18 &&
+          Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+        onPanResponderRelease: (_, gestureState) => {
+          if (gestureState.dx < -52) {
+            goNext();
+          } else if (gestureState.dx > 52) {
+            goPrevious();
+          }
+        },
+      }),
+    [goNext, goPrevious],
+  );
+
   React.useEffect(() => {
-    getImageUrl(item.thumb_url).then(setUri).catch(() => setUri(null));
-  }, [item.thumb_url]);
-  return uri ? <Image source={{uri}} style={styles.previewImage} /> : null;
+    let mounted = true;
+    setUri(null);
+    setFailed(false);
+    setCopyStatus('');
+    if (!item) {
+      return () => {
+        mounted = false;
+      };
+    }
+    getImageUrl(item.image_url || `/image/${item.image_rowid}`)
+      .then(value => {
+        if (mounted) {
+          setUri(value);
+        }
+      })
+      .catch(() => {
+        if (mounted) {
+          setFailed(true);
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [item]);
+
+  const handleCopy = async () => {
+    if (!uri) {
+      return;
+    }
+    setCopyStatus('Copying image...');
+    try {
+      await copyImageToClipboard(uri);
+      setCopyStatus('Image copied.');
+    } catch (err) {
+      setCopyStatus(err instanceof Error ? err.message : 'Copy failed.');
+    }
+  };
+
+  const note = item?.user_description || item?.description || '';
+  const displayDate = formatDisplayDate(item?.timestamp);
+  const sourceLabel = item ? getSourceLabel(item) : '';
+
+  return (
+    <Modal visible={Boolean(item)} animationType="fade" onRequestClose={onClose}>
+      <View style={styles.detailScreen} {...panResponder.panHandlers}>
+        <View style={styles.detailHeader}>
+          <BackIconButton onPress={onClose} light />
+          <Text style={styles.resultCounter}>
+            {index !== null ? `${index + 1} / ${results.length}` : ''}
+          </Text>
+          <Pressable
+            disabled={!uri}
+            onPress={handleCopy}
+            style={[styles.headerButton, !uri && styles.headerButtonDisabled]}>
+            <Text style={styles.headerButtonText}>Copy</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.detailImageShell}>
+          {uri && !failed ? (
+            <Image
+              source={{uri}}
+              resizeMode="contain"
+              style={styles.detailImage}
+              onError={() => setFailed(true)}
+            />
+          ) : (
+            <View style={styles.detailPlaceholder}>
+              {failed ? (
+                <Text style={styles.placeholderText}>No image</Text>
+              ) : (
+                <ActivityIndicator color={colors.paper} />
+              )}
+            </View>
+          )}
+        </View>
+
+        {item ? (
+          <View style={styles.metadataPanel}>
+            {note ? (
+              <Text style={styles.descriptionPrimary}>{note}</Text>
+            ) : (
+              <Text style={styles.descriptionMuted}>No description saved.</Text>
+            )}
+            {displayDate ? <Text style={styles.meta}>{displayDate}</Text> : null}
+            {sourceLabel ? <Text style={styles.sourcePath}>{sourceLabel}</Text> : null}
+            {copyStatus ? <Text style={styles.copyStatus}>{copyStatus}</Text> : null}
+          </View>
+        ) : null}
+      </View>
+    </Modal>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -216,6 +412,67 @@ const styles = StyleSheet.create({
     right: 18,
     top: 56,
     zIndex: 10,
+  },
+  profileButton: {
+    alignItems: 'center',
+    backgroundColor: colors.ink,
+    borderRadius: 8,
+    elevation: 4,
+    height: 44,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 72,
+    top: 56,
+    width: 44,
+    zIndex: 10,
+  },
+  profileIconHead: {
+    backgroundColor: colors.paper,
+    borderRadius: 5,
+    height: 10,
+    marginBottom: 3,
+    width: 10,
+  },
+  profileIconBody: {
+    backgroundColor: colors.paper,
+    borderTopLeftRadius: 10,
+    borderTopRightRadius: 10,
+    height: 10,
+    width: 22,
+  },
+  searchButton: {
+    alignItems: 'center',
+    backgroundColor: colors.ink,
+    borderRadius: 8,
+    height: 44,
+    justifyContent: 'center',
+    position: 'relative',
+    width: 44,
+  },
+  searchIconCircle: {
+    borderColor: colors.paper,
+    borderRadius: 8,
+    borderWidth: 2.4,
+    height: 17,
+    marginLeft: -3,
+    marginTop: -3,
+    width: 17,
+  },
+  searchIconHandle: {
+    backgroundColor: colors.paper,
+    borderRadius: 2,
+    height: 11,
+    position: 'absolute',
+    right: 13,
+    top: 27,
+    transform: [{rotate: '-45deg'}],
+    width: 2.4,
+  },
+  pressedButton: {
+    opacity: 0.78,
+  },
+  disabledButton: {
+    opacity: 0.4,
   },
   searchShell: {
     alignItems: 'center',
@@ -290,52 +547,91 @@ const styles = StyleSheet.create({
   footer: {
     padding: 20,
   },
-  modalShade: {
+  detailScreen: {
+    backgroundColor: colors.ink,
+    flex: 1,
+  },
+  detailHeader: {
     alignItems: 'center',
-    backgroundColor: 'rgba(21,21,18,0.68)',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 52,
+    zIndex: 2,
+  },
+  headerButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(251,250,246,0.16)',
+    borderColor: 'rgba(251,250,246,0.22)',
+    borderRadius: 8,
+    borderWidth: 1,
+    minHeight: 40,
+    minWidth: 72,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  headerButtonDisabled: {
+    opacity: 0.45,
+  },
+  headerButtonText: {
+    color: colors.paper,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  resultCounter: {
+    color: colors.paper,
+    fontSize: 13,
+    fontWeight: '700',
+    opacity: 0.72,
+  },
+  detailImageShell: {
     flex: 1,
     justifyContent: 'center',
-    padding: 18,
+    paddingHorizontal: 8,
+    paddingVertical: 12,
   },
-  modalPanel: {
-    backgroundColor: colors.panel,
-    borderRadius: 8,
-    maxHeight: '86%',
-    padding: 16,
+  detailImage: {
+    height: '100%',
     width: '100%',
   },
-  close: {
+  detailPlaceholder: {
     alignItems: 'center',
-    alignSelf: 'flex-end',
-    height: 36,
+    flex: 1,
     justifyContent: 'center',
-    width: 36,
   },
-  closeText: {
+  metadataPanel: {
+    backgroundColor: colors.paper,
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+    gap: 8,
+    paddingBottom: 28,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+  },
+  descriptionPrimary: {
     color: colors.ink,
-    fontSize: 22,
-    fontWeight: '800',
+    fontSize: 16,
+    fontWeight: '700',
+    lineHeight: 22,
   },
-  previewImage: {
-    aspectRatio: 1,
-    borderRadius: 8,
-    width: '100%',
-  },
-  modalTitle: {
-    color: colors.ink,
-    fontSize: 18,
-    fontWeight: '800',
-    marginTop: 14,
-  },
-  description: {
-    color: colors.ink,
-    fontSize: 14,
+  descriptionMuted: {
+    color: colors.muted,
+    fontSize: 16,
     lineHeight: 20,
-    marginTop: 8,
   },
   meta: {
+    color: colors.ink,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  sourcePath: {
     color: colors.muted,
-    fontSize: 12,
-    marginTop: 12,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  copyStatus: {
+    color: colors.green,
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

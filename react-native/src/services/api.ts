@@ -5,9 +5,12 @@ export type SearchResult = {
   image_rowid: string;
   distance: number;
   description?: string | null;
+  user_description?: string | null;
   album_title?: string | null;
   timestamp?: string | null;
   thumb_url: string;
+  image_url: string;
+  source_url?: string | null;
 };
 
 export type SettingsResponse = {
@@ -15,6 +18,17 @@ export type SettingsResponse = {
   name: string;
   album_url: string;
   gemini_key_set: boolean;
+};
+
+export type ProfileResponse = {
+  email: string;
+  name: string;
+  photo_url: string;
+  stats: {
+    files_indexed: number;
+    queries_last_week: number;
+    queries_lifetime: number;
+  };
 };
 
 export type CropRect = {
@@ -79,6 +93,10 @@ export async function makeAuthenticatedRequest<T>(
 
 export async function getSettings() {
   return makeAuthenticatedRequest<SettingsResponse>('/settings');
+}
+
+export async function getProfile() {
+  return makeAuthenticatedRequest<ProfileResponse>('/profile');
 }
 
 export async function saveAlbumUrl(albumUrl: string) {

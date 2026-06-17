@@ -15,8 +15,9 @@ import {LoginScreen} from './screens/LoginScreen';
 import {QueryScreen} from './screens/QueryScreen';
 import {SettingsScreen} from './screens/SettingsScreen';
 import {ShareReviewScreen} from './screens/ShareReviewScreen';
+import {ProfileScreen} from './screens/ProfileScreen';
 
-type Screen = 'login' | 'query' | 'settings' | 'shareReview';
+type Screen = 'login' | 'query' | 'settings' | 'profile' | 'shareReview';
 
 export default function App() {
   const [user, setUser] = useState<FirebaseAuthTypes.User | null>(null);
@@ -145,9 +146,15 @@ export default function App() {
           user={user}
           onBack={() => setScreen(user ? 'query' : 'login')}
         />
+      ) : screen === 'profile' ? (
+        <ProfileScreen
+          user={user}
+          onBack={() => setScreen(user ? 'query' : 'login')}
+        />
       ) : user && screen === 'query' ? (
         <QueryScreen
           onSettings={() => setScreen('settings')}
+          onProfile={() => setScreen('profile')}
           shareStatus={shareStatus}
           shareError={shareError}
         />

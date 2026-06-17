@@ -49,6 +49,9 @@ class FirestoreDB:
     def _secrets_collection(self, user_id: str):
         return self.db.collection('users').document(user_id).collection('secrets')
 
+    def _queries_collection(self, user_id: str):
+        return self.db.collection('users').document(user_id).collection('queries')
+
     def add_image_data(self, user_id: str, image_data: Dict[str, Any]):
         media_id = image_data.get('image_id') or image_data.get('google_media_id')
         if media_id:
@@ -182,13 +185,98 @@ class FirestoreDB:
         except Exception as e:
             log_exception(logger, f"Search failed for user {user_id}", e)
             raise
-    def get_image_blob(self, image_id: str | int, prefer_thumb: bool = False) -> Tuple[Optional[bytes], Optional[str]]:
+
+    def record_query_event(
+        self,
+        user_id: str,
+        query: str,
+        top_k: int,
+        result_count: int,
+    ) -> None:
+        """Persist a lightweight successful-query event for profile stats."""
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        payload = {
+            "query": query,
+            "top_k": top_k,
+            "result_count": result_count,
+            "created_at": now,
+            "created_at_iso": now.isoformat(),
+        }
+        if self._use_firestore:
+            self._queries_collection(user_id).add(payload)
+        else:
+            user_doc = self._local_users.setdefault(user_id, {})
+            user_doc.setdefault("queries", []).append(payload)
+
+    def get_profile_stats(self, user_id: str) -> Dict[str, int]:
+        """Return simple per-user profile counters."""
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        week_start = now - datetime.timedelta(days=7)
+        files_indexed = 0
+        queries_lifetime = 0
+        queries_last_week = 0
+
+        if self._use_firestore:
+            for _ in self._images_collection(user_id).stream():
+                files_indexed += 1
+            for doc in self._queries_collection(user_id).stream():
+                queries_lifetime += 1
+                data = doc.to_dict() or {}
+                created_at = data.get("created_at")
+                if isinstance(created_at, datetime.datetime):
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+                    if created_at >= week_start:
+                        queries_last_week += 1
+                elif isinstance(created_at, str):
+                    try:
+                        parsed = datetime.datetime.fromisoformat(created_at)
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+                        if parsed >= week_start:
+                            queries_last_week += 1
+                    except ValueError:
+                        pass
+            return {
+                "files_indexed": files_indexed,
+                "queries_lifetime": queries_lifetime,
+                "queries_last_week": queries_last_week,
+            }
+
+        files_indexed = sum(
+            1
+            for image in self._local_images.values()
+            if image.get("user_id") in (None, user_id)
+        )
+        queries = self._local_users.get(user_id, {}).get("queries", [])
+        queries_lifetime = len(queries)
+        for query_event in queries:
+            created_at = query_event.get("created_at")
+            if isinstance(created_at, datetime.datetime):
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+                if created_at >= week_start:
+                    queries_last_week += 1
+        return {
+            "files_indexed": files_indexed,
+            "queries_lifetime": queries_lifetime,
+            "queries_last_week": queries_last_week,
+        }
+
+    def get_image_blob(
+        self,
+        image_id: str | int,
+        prefer_thumb: bool = False,
+        user_id: Optional[str] = None,
+    ) -> Tuple[Optional[bytes], Optional[str]]:
         """Return raw image bytes and mime type for ``image_id``.
 
         When ``prefer_thumb`` is ``True`` the thumbnail is returned if available.
         """
 
-        doc = self._get_image_document(image_id)
+        doc = self._get_image_document(image_id, user_id=user_id)
         if not doc:
             return None, None
 
@@ -351,9 +439,20 @@ class FirestoreDB:
                     continue
                 yield image_id, data
 
-    def _get_image_document(self, image_id: str | int) -> Optional[Dict[str, Any]]:
+    def _get_image_document(
+        self,
+        image_id: str | int,
+        user_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         key = str(image_id)
         if self._use_firestore:
+            if user_id:
+                doc = self._images_collection(user_id).document(key).get()
+                if doc.exists:
+                    data = doc.to_dict() or {}
+                    data.setdefault("image_rowid", key)
+                    return data
+
             doc = self.db.collection(self._IMAGES_COLLECTION).document(key).get()
             if doc.exists:
                 data = doc.to_dict() or {}

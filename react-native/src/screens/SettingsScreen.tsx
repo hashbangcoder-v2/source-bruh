@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 import {FirebaseAuthTypes} from '@react-native-firebase/auth';
+import {BackIconButton} from '../components/BackIconButton';
 import {StatusText} from '../components/StatusText';
 import {
   getSettings,
@@ -149,9 +150,7 @@ export function SettingsScreen({user, onBack}: Props) {
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <View style={styles.header}>
-        <Pressable onPress={onBack} style={({pressed}) => [styles.back, pressed && styles.pressed]}>
-          <Text style={styles.backText}>Back</Text>
-        </Pressable>
+        <BackIconButton onPress={onBack} />
         <Text style={styles.title}>Settings</Text>
       </View>
 
@@ -273,21 +272,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     marginBottom: 22,
-  },
-  back: {
-    alignItems: 'center',
-    backgroundColor: colors.panel,
-    borderColor: colors.line,
-    borderWidth: 1,
-    borderRadius: 8,
-    minHeight: 42,
-    justifyContent: 'center',
-    paddingHorizontal: 14,
-  },
-  backText: {
-    color: colors.ink,
-    fontSize: 14,
-    fontWeight: '800',
   },
   title: {
     color: colors.ink,

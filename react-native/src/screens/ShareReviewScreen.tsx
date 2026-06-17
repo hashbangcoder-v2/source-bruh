@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import {StatusText} from '../components/StatusText';
+import {BackIconButton} from '../components/BackIconButton';
 import {CropRect} from '../services/api';
 import {PreparedSharedImage} from '../services/shareIntent';
 import {colors} from '../theme/colors';
@@ -172,16 +173,7 @@ export function ShareReviewScreen({
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled">
       <View style={styles.header}>
-        <Pressable
-          onPress={onCancel}
-          disabled={submitting}
-          style={({pressed}) => [
-            styles.backButton,
-            pressed && styles.pressed,
-            submitting && styles.disabled,
-          ]}>
-          <Text style={styles.backText}>Back</Text>
-        </Pressable>
+        <BackIconButton onPress={onCancel} disabled={submitting} />
         <Text style={styles.title}>Review Share</Text>
       </View>
 
@@ -397,21 +389,6 @@ const styles = StyleSheet.create({
     color: colors.paper,
     fontSize: 15,
     fontWeight: '800',
-  },
-  backButton: {
-    alignItems: 'center',
-    backgroundColor: colors.panel,
-    borderColor: colors.line,
-    borderRadius: 8,
-    borderWidth: 1,
-    justifyContent: 'center',
-    minHeight: 34,
-    paddingHorizontal: 12,
-  },
-  backText: {
-    color: colors.ink,
-    fontSize: 13,
-    fontWeight: '700',
   },
   neutralButton: {
     alignItems: 'center',
