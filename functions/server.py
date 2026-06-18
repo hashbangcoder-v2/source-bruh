@@ -238,14 +238,31 @@ def create_app(config_path: str = None) -> FastAPI:
         or db_cfg.get("image_collection")
         or "images"
     )
+    vector_search_enabled = str(
+        os.environ.get("SOURCE_BRUH_VECTOR_SEARCH")
+        or db_cfg.get("vector_search_enabled", True)
+    ).lower() not in {"0", "false", "no", "off"}
+    vector_search_fallback = str(
+        os.environ.get("SOURCE_BRUH_VECTOR_SEARCH_FALLBACK")
+        or db_cfg.get("vector_search_fallback", False)
+    ).lower() not in {"0", "false", "no", "off"}
+    vector_field = os.environ.get("SOURCE_BRUH_VECTOR_FIELD") or db_cfg.get(
+        "vector_field", "embedding_vector"
+    )
     logger.info("🔥 Initializing Firestore database connection")
     try:
         db = FirestoreDB(
             cfg["db"]["service_account_key_path"],
             image_collection=image_collection,
             storage_bucket=storage_bucket,
+            vector_search_enabled=vector_search_enabled,
+            vector_search_fallback=vector_search_fallback,
+            vector_field=vector_field,
         )
-        logger.info(f"✓ Firestore connected successfully (image_collection={image_collection})")
+        logger.info(
+            "✓ Firestore connected successfully "
+            f"(image_collection={image_collection}, vector_search={vector_search_enabled})"
+        )
     except Exception as e:
         logger.error(f"✗ Failed to initialize Firestore: {e}")
         raise

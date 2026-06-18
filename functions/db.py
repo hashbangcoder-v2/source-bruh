@@ -6,6 +6,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
+from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
+from google.cloud.firestore_v1.vector import Vector
 from google.oauth2.credentials import Credentials
 from logger_config import get_logger, log_exception
 
@@ -18,6 +20,9 @@ class FirestoreDB:
         service_account_key_path: str,
         image_collection: str = "images",
         storage_bucket: Optional[str] = None,
+        vector_search_enabled: bool = True,
+        vector_search_fallback: bool = False,
+        vector_field: str = "embedding_vector",
     ):
         logger.info(f"🔥 Initializing Firestore database")
         logger.debug(f"Service account key: {service_account_key_path}")
@@ -42,6 +47,9 @@ class FirestoreDB:
         self._local_images: Dict[str, Dict[str, Any]] = {}
         self._IMAGES_COLLECTION = image_collection or "images"
         self._storage_bucket = storage_bucket
+        self._vector_search_enabled = vector_search_enabled
+        self._vector_search_fallback = vector_search_fallback
+        self._vector_field = vector_field or "embedding_vector"
 
     def _images_collection(self, user_id: str):
         return self.db.collection('users').document(user_id).collection(self._IMAGES_COLLECTION)
@@ -58,18 +66,62 @@ class FirestoreDB:
             self.upsert_media_item(user_id, media_id, image_data)
             return
         # Store image data in a user-specific collection when no explicit id is provided
-        self._images_collection(user_id).add(image_data)
+        self._images_collection(user_id).add(self._prepare_image_payload(image_data))
 
     def has_media_item(self, user_id: str, media_id: str) -> bool:
         doc = self._images_collection(user_id).document(media_id).get()
         return doc.exists
 
     def upsert_media_item(self, user_id: str, media_id: str, image_data: Dict[str, Any]) -> str:
-        payload = dict(image_data)
+        payload = self._prepare_image_payload(image_data)
         payload.setdefault('image_id', media_id)
         doc_ref = self._images_collection(user_id).document(media_id)
         doc_ref.set(payload)
         return doc_ref.id
+
+    def backfill_embedding_vectors(
+        self,
+        user_id: str,
+        *,
+        limit: Optional[int] = None,
+        dry_run: bool = True,
+        force: bool = False,
+    ) -> Dict[str, int]:
+        """Backfill Firestore native vector values from existing embedding lists."""
+
+        scanned = 0
+        updated = 0
+        skipped = 0
+        missing_embedding = 0
+
+        for doc in self._images_collection(user_id).stream():
+            if limit is not None and scanned >= limit:
+                break
+            scanned += 1
+            data = doc.to_dict() or {}
+            embedding = self._coerce_embedding_list(data.get("embedding"))
+            if not embedding:
+                missing_embedding += 1
+                continue
+            if not force and data.get(self._vector_field) is not None:
+                skipped += 1
+                continue
+            updated += 1
+            if not dry_run:
+                doc.reference.update(
+                    {
+                        self._vector_field: Vector(embedding),
+                        "embedding_dim": len(embedding),
+                    }
+                )
+
+        return {
+            "scanned": scanned,
+            "updated": updated,
+            "skipped": skipped,
+            "missing_embedding": missing_embedding,
+            "dry_run": int(dry_run),
+        }
 
     def store_image_blobs(
         self,
@@ -147,7 +199,7 @@ class FirestoreDB:
         results = []
         for img in all_images:
             img_dict = img.to_dict()
-            embedding = img_dict.get('embedding', [])
+            embedding = self._coerce_embedding_list(img_dict.get('embedding'))
             
             if not embedding:
                 continue
@@ -159,6 +211,28 @@ class FirestoreDB:
             results.append(img_dict)
 
         return sorted(results, key=lambda x: x['distance'])[:top_k]
+
+    def search_vectors_firestore(self, user_id: str, query_vector: List[float], top_k: int) -> List[Dict[str, Any]]:
+        """Use Firestore native KNN vector search for a user's image collection."""
+
+        vector_query = self._images_collection(user_id).find_nearest(
+            vector_field=self._vector_field,
+            query_vector=Vector(query_vector),
+            distance_measure=DistanceMeasure.COSINE,
+            limit=top_k,
+            distance_result_field="distance",
+        )
+
+        results: List[Dict[str, Any]] = []
+        for doc in vector_query.stream():
+            data = doc.to_dict() or {}
+            data["image_rowid"] = doc.id
+            if data.get("distance") is None:
+                embedding = self._coerce_embedding_list(data.get("embedding"))
+                data["distance"] = self._cosine_distance(query_vector, embedding)
+            results.append(data)
+
+        return results
     
     def search(self, query_embedding: List[float], top_k: int = 20, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -179,6 +253,23 @@ class FirestoreDB:
             raise ValueError("user_id is required for search")
         
         try:
+            if self._use_firestore and self._vector_search_enabled:
+                try:
+                    results = self.search_vectors_firestore(user_id, query_embedding, top_k)
+                    if results or not self._vector_search_fallback:
+                        logger.info(f"✓ Firestore vector search completed: found {len(results)} results")
+                        return results
+                    logger.warning(
+                        "Firestore vector search returned no results; falling back to full scan"
+                    )
+                except Exception as vector_error:
+                    if not self._vector_search_fallback:
+                        raise
+                    logger.warning(
+                        "Firestore vector search failed; falling back to full scan: "
+                        f"{vector_error}"
+                    )
+
             results = self.search_vectors(user_id, query_embedding, top_k)
             logger.info(f"✓ Search completed: found {len(results)} results")
             return results
@@ -483,6 +574,24 @@ class FirestoreDB:
 
             return None
         return self._local_images.get(key)
+
+    def _prepare_image_payload(self, image_data: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(image_data)
+        embedding = self._coerce_embedding_list(payload.get("embedding"))
+        if embedding and payload.get(self._vector_field) is None:
+            payload[self._vector_field] = Vector(embedding)
+        return payload
+
+    @staticmethod
+    def _coerce_embedding_list(value: Any) -> List[float]:
+        if value is None:
+            return []
+        if isinstance(value, Vector):
+            vector_value = value.to_map_value().get("value", [])
+            return [float(item) for item in vector_value]
+        if isinstance(value, (list, tuple)):
+            return [float(item) for item in value]
+        return []
 
     @staticmethod
     def _cosine_distance(vec1: List[float], vec2: List[float]) -> float:

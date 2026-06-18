@@ -1,3 +1,4 @@
+import importlib
 import sys
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def test_settings_returns_user_info(monkeypatch):
     }
 
     class DummyFirestoreDB:
-        def __init__(self, service_account_path, image_collection="images", storage_bucket=None):
+        def __init__(self, service_account_path, image_collection="images", storage_bucket=None, **kwargs):
             self.service_account_path = service_account_path
             self.image_collection = image_collection
             self.storage_bucket = storage_bucket
@@ -49,13 +50,17 @@ def test_settings_returns_user_info(monkeypatch):
 
     stub_config_loader = types.ModuleType("config_loader")
     stub_config_loader.load_config = lambda _=None: sample_cfg
-    sys.modules["config_loader"] = stub_config_loader
+    monkeypatch.setitem(sys.modules, "config_loader", stub_config_loader)
 
     stub_db = types.ModuleType("db")
     stub_db.FirestoreDB = DummyFirestoreDB
-    sys.modules["db"] = stub_db
+    monkeypatch.setitem(sys.modules, "db", stub_db)
+    sys.modules.pop("functions.server", None)
+    functions_pkg = sys.modules.get("functions")
+    if functions_pkg and hasattr(functions_pkg, "server"):
+        monkeypatch.delattr(functions_pkg, "server", raising=False)
 
-    from functions import server
+    server = importlib.import_module("functions.server")
 
     monkeypatch.setattr(server, "load_config", lambda _: sample_cfg)
     monkeypatch.setattr(server, "GooglePhotosClient", DummyPhotosClient)

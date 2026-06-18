@@ -1,3 +1,4 @@
+import importlib
 import sys
 import types
 from pathlib import Path
@@ -26,7 +27,7 @@ def _import_server_with_stubs(monkeypatch):
     }
 
     class DummyFirestoreDB:
-        def __init__(self, service_account_path, image_collection="images", storage_bucket=None):
+        def __init__(self, service_account_path, image_collection="images", storage_bucket=None, **kwargs):
             pass
 
     class DummyPhotosClient:
@@ -40,8 +41,12 @@ def _import_server_with_stubs(monkeypatch):
     stub_db = types.ModuleType("db")
     stub_db.FirestoreDB = DummyFirestoreDB
     monkeypatch.setitem(sys.modules, "db", stub_db)
+    sys.modules.pop("functions.server", None)
+    functions_pkg = sys.modules.get("functions")
+    if functions_pkg and hasattr(functions_pkg, "server"):
+        monkeypatch.delattr(functions_pkg, "server", raising=False)
 
-    import functions.server as server
+    server = importlib.import_module("functions.server")
 
     monkeypatch.setattr(server, "load_config", lambda _: sample_cfg)
     monkeypatch.setattr(server, "GooglePhotosClient", DummyPhotosClient)
