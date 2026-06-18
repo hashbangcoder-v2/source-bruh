@@ -65,6 +65,7 @@ class SettingsResponse(BaseModel):
     name: str = ""
     album_url: str
     gemini_key_set: bool
+    backend_info: Optional[Dict[str, Any]] = None
 
 class ProfileStatsResponse(BaseModel):
     files_indexed: int = 0
@@ -742,6 +743,14 @@ def create_app(config_path: str = None) -> FastAPI:
                 name=name,
                 album_url=album_url,
                 gemini_key_set=gemini_key_set,
+                backend_info={
+                    "project_id": os.environ.get("GCLOUD_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT") or "",
+                    "image_collection": image_collection,
+                    "storage_bucket": storage_bucket or "",
+                    "vector_field": vector_field,
+                    "vector_search_enabled": vector_search_enabled,
+                    "vector_search_fallback": vector_search_fallback,
+                },
             )
         except Exception as e:
             log_exception(logger, "Failed to fetch settings", e)

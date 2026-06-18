@@ -77,4 +77,12 @@ def test_settings_returns_user_info(monkeypatch):
             "name": "",
             "album_url": "https://example.com/album",
             "gemini_key_set": True,
+            "backend_info": {
+                "project_id": "",
+                "image_collection": "images_test",
+                "storage_bucket": "test-bucket",
+                "vector_field": "embedding_vector",
+                "vector_search_enabled": True,
+                "vector_search_fallback": False,
+            },
         }

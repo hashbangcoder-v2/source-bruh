@@ -12,6 +12,7 @@ import {BackIconButton} from '../components/BackIconButton';
 import {StatusText} from '../components/StatusText';
 import {
   getSettings,
+  SettingsResponse,
   saveGeminiKey,
   testHealth,
 } from '../services/api';
@@ -39,6 +40,7 @@ export function SettingsScreen({user, onBack}: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [serverUrl, setServerUrl] = useState('');
+  const [backendInfo, setBackendInfo] = useState<SettingsResponse['backend_info']>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -65,6 +67,7 @@ export function SettingsScreen({user, onBack}: Props) {
             const settings = await getSettings();
             if (mounted) {
               setGeminiSet(Boolean(settings.gemini_key_set));
+              setBackendInfo(settings.backend_info || null);
             }
           } catch (settingsError) {
             if (mounted) {
@@ -116,10 +119,20 @@ export function SettingsScreen({user, onBack}: Props) {
 
   const toggleServer = async (enabled: boolean) => {
     setUseLocal(enabled);
+    setBackendInfo(null);
     await setServerMode(enabled ? 'local' : 'production');
     const nextUrl = await getServerBaseUrl();
     setServerUrl(nextUrl);
     setStatus(`Using ${enabled ? 'local' : 'production'} server.`);
+    if (!enabled && user) {
+      try {
+        const settings = await getSettings();
+        setGeminiSet(Boolean(settings.gemini_key_set));
+        setBackendInfo(settings.backend_info || null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unable to load production settings.');
+      }
+    }
   };
 
   const chooseServer = (mode: 'local' | 'production') => {
@@ -207,9 +220,29 @@ export function SettingsScreen({user, onBack}: Props) {
             </View>
           </>
         ) : (
-          <Pressable onPress={testServer} style={({pressed}) => [styles.secondaryButton, pressed && styles.pressed]}>
-            <Text style={styles.secondaryText}>Test server</Text>
-          </Pressable>
+          <>
+            {backendInfo ? (
+              <View style={styles.readOnlyBox}>
+                <Text style={styles.readOnlyLabel}>Firestore</Text>
+                <Text style={styles.readOnlyValue}>
+                  {backendInfo.project_id || 'source-bruh'} / {backendInfo.image_collection || 'images'}
+                </Text>
+                <Text style={styles.readOnlyLabel}>Cloud Storage bucket</Text>
+                <Text style={styles.readOnlyValue}>
+                  {backendInfo.storage_bucket || 'Not reported'}
+                </Text>
+                <Text style={styles.readOnlyLabel}>Vector search</Text>
+                <Text style={styles.readOnlyValue}>
+                  {backendInfo.vector_search_enabled ? 'Enabled' : 'Disabled'}
+                  {backendInfo.vector_field ? ` - ${backendInfo.vector_field}` : ''}
+                  {backendInfo.vector_search_fallback ? ' - fallback on' : ''}
+                </Text>
+              </View>
+            ) : null}
+            <Pressable onPress={testServer} style={({pressed}) => [styles.secondaryButton, pressed && styles.pressed]}>
+              <Text style={styles.secondaryText}>Test server</Text>
+            </Pressable>
+          </>
         )}
       </View>
 
@@ -299,6 +332,26 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 12,
     marginTop: 4,
+  },
+  readOnlyBox: {
+    backgroundColor: colors.panel,
+    borderColor: colors.line,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 5,
+    padding: 12,
+  },
+  readOnlyLabel: {
+    color: colors.ink,
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  readOnlyValue: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 4,
   },
   input: {
     backgroundColor: colors.panel,

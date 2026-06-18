@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
-  Modal,
   PanResponder,
   Pressable,
   StyleSheet,
@@ -185,21 +184,25 @@ export function QueryScreen({onSettings, onProfile, shareStatus, shareError}: Pr
 
   return (
     <View style={styles.container}>
-      <ProfileIconButton onPress={onProfile} />
-      <IconButton
-        label="Settings"
-        symbol="⚙"
-        onPress={onSettings}
-        hitSlop={10}
-        style={styles.settingsButton}
-      />
+      {selectedIndex === null ? (
+        <>
+          <ProfileIconButton onPress={onProfile} />
+          <IconButton
+            label="Settings"
+            symbol="⚙"
+            onPress={onSettings}
+            hitSlop={10}
+            style={styles.settingsButton}
+          />
+        </>
+      ) : null}
 
       <View
         style={[
           styles.searchShell,
           results.length ? styles.searchShellWithResults : styles.searchShellHome,
         ]}>
-        <Text style={styles.title}>Need a source?</Text>
+        {!results.length ? <Text style={styles.title}>Need a source?</Text> : null}
 
         <View style={styles.searchRow}>
           <TextInput
@@ -248,7 +251,7 @@ export function QueryScreen({onSettings, onProfile, shareStatus, shareError}: Pr
         />
       ) : null}
 
-      <ResultDetailModal
+      <ResultDetailLayer
         index={selectedIndex}
         results={results}
         onClose={() => setSelectedIndex(null)}
@@ -258,7 +261,7 @@ export function QueryScreen({onSettings, onProfile, shareStatus, shareError}: Pr
   );
 }
 
-function ResultDetailModal({
+function ResultDetailLayer({
   index,
   results,
   onClose,
@@ -291,13 +294,17 @@ function ResultDetailModal({
   const panResponder = React.useMemo(
     () =>
       PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponderCapture: (_, gestureState) =>
+          Math.abs(gestureState.dx) > 12 &&
+          Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.25,
         onMoveShouldSetPanResponder: (_, gestureState) =>
-          Math.abs(gestureState.dx) > 18 &&
-          Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+          Math.abs(gestureState.dx) > 12 &&
+          Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.25,
         onPanResponderRelease: (_, gestureState) => {
-          if (gestureState.dx < -52) {
+          if (gestureState.dx < -36) {
             goNext();
-          } else if (gestureState.dx > 52) {
+          } else if (gestureState.dx > 36) {
             goPrevious();
           }
         },
@@ -348,8 +355,11 @@ function ResultDetailModal({
   const displayDate = formatDisplayDate(item?.timestamp);
   const sourceLabel = item ? getSourceLabel(item) : '';
 
+  if (!item) {
+    return null;
+  }
+
   return (
-    <Modal visible={Boolean(item)} animationType="fade" onRequestClose={onClose}>
       <View style={styles.detailScreen} {...panResponder.panHandlers}>
         <View style={styles.detailHeader}>
           <BackIconButton onPress={onClose} light />
@@ -383,20 +393,17 @@ function ResultDetailModal({
           )}
         </View>
 
-        {item ? (
-          <View style={styles.metadataPanel}>
-            {note ? (
-              <Text style={styles.descriptionPrimary}>{note}</Text>
-            ) : (
-              <Text style={styles.descriptionMuted}>No description saved.</Text>
-            )}
-            {displayDate ? <Text style={styles.meta}>{displayDate}</Text> : null}
-            {sourceLabel ? <Text style={styles.sourcePath}>{sourceLabel}</Text> : null}
-            {copyStatus ? <Text style={styles.copyStatus}>{copyStatus}</Text> : null}
-          </View>
-        ) : null}
+        <View style={styles.metadataPanel}>
+          {note ? (
+            <Text style={styles.descriptionPrimary}>{note}</Text>
+          ) : (
+            <Text style={styles.descriptionMuted}>No description saved.</Text>
+          )}
+          {displayDate ? <Text style={styles.meta}>{displayDate}</Text> : null}
+          {sourceLabel ? <Text style={styles.sourcePath}>{sourceLabel}</Text> : null}
+          {copyStatus ? <Text style={styles.copyStatus}>{copyStatus}</Text> : null}
+        </View>
       </View>
-    </Modal>
   );
 }
 
@@ -549,7 +556,13 @@ const styles = StyleSheet.create({
   },
   detailScreen: {
     backgroundColor: colors.ink,
-    flex: 1,
+    bottom: 0,
+    elevation: 40,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 1000,
   },
   detailHeader: {
     alignItems: 'center',

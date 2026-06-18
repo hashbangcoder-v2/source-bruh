@@ -18,6 +18,14 @@ export type SettingsResponse = {
   name: string;
   album_url: string;
   gemini_key_set: boolean;
+  backend_info?: {
+    project_id?: string;
+    image_collection?: string;
+    storage_bucket?: string;
+    vector_field?: string;
+    vector_search_enabled?: boolean;
+    vector_search_fallback?: boolean;
+  } | null;
 };
 
 export type ProfileResponse = {
