@@ -225,7 +225,7 @@ export function SettingsScreen({user, onBack}: Props) {
               <View style={styles.readOnlyBox}>
                 <Text style={styles.readOnlyLabel}>Firestore</Text>
                 <Text style={styles.readOnlyValue}>
-                  {backendInfo.project_id || 'source-bruh'} / {backendInfo.image_collection || 'images'}
+                  {backendInfo.project_id || 'Unknown project'} / {backendInfo.image_collection || 'images'}
                 </Text>
                 <Text style={styles.readOnlyLabel}>Cloud Storage bucket</Text>
                 <Text style={styles.readOnlyValue}>

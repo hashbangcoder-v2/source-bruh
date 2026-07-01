@@ -2,6 +2,21 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+def hasReleaseKeystore = ["storeFile", "storePassword", "keyAlias", "keyPassword"].every {
+    keystoreProperties[it] != null && keystoreProperties[it].toString().trim()
+}
+def sourceBruhVersionCode = project.hasProperty("VERSION_CODE")
+    ? project.property("VERSION_CODE").toString()
+    : "1"
+def sourceBruhVersionName = project.hasProperty("VERSION_NAME")
+    ? project.property("VERSION_NAME").toString()
+    : "0.1.0"
+
 react {
 }
 
@@ -18,8 +33,8 @@ android {
         applicationId "com.sourcebruh.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode sourceBruhVersionCode.toInteger()
+        versionName sourceBruhVersionName
     }
 
     signingConfigs {
@@ -29,6 +44,14 @@ android {
             keyAlias "androiddebugkey"
             keyPassword "android"
         }
+        release {
+            if (hasReleaseKeystore) {
+                storeFile rootProject.file(keystoreProperties["storeFile"])
+                storePassword keystoreProperties["storePassword"]
+                keyAlias keystoreProperties["keyAlias"]
+                keyPassword keystoreProperties["keyPassword"]
+            }
+        }
     }
 
     buildTypes {
@@ -36,7 +59,9 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            signingConfig signingConfigs.debug
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }

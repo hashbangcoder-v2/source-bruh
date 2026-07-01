@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .firebase/
+.local/
 
 *.log
 
@@ -50,6 +51,8 @@ functions/gcloud-service-account.json
 **/*.key
 **/*.jks
 **/*.keystore
+**/keystore.properties
+**/release-signing.properties
 # Python bytecode
 functions/__pycache__/
 functions/*.md
