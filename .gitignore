@@ -61,4 +61,3 @@ frontend/*.md
 # Python virtual environment
 functions/venv/
 data/
-!data/images
