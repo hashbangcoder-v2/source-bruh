@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 .firebase/
 .local/
+/BUILD_TEST_DEPLOY.md
 
 *.log
 
